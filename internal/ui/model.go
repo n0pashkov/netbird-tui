@@ -66,6 +66,7 @@ type Model struct {
 	status          *proto.StatusResponse
 	networks        []*proto.Network
 	fwdRules        []*proto.ForwardingRule
+	config          *proto.GetConfigResponse
 	peersTable      table.Model
 	routesTable     table.Model
 	fwdTable        table.Model
@@ -78,8 +79,10 @@ type Model struct {
 	lastAction      string
 	setupKeyInput   textinput.Model
 	mgmtURLInput    textinput.Model
-	settingsFocused int // 0=setupKey, 1=mgmtURL
+	settingsFocused int  // 0=setupKey, 1=mgmtURL
+	settingsEditing bool // false=browse, true=editing active field
 	settingsMsg     string
+	peerDetail      bool // true=showing peer detail view
 }
 
 func New(c *client.Client) *Model {
@@ -91,7 +94,7 @@ func New(c *client.Client) *Model {
 	ski.Placeholder = "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
 	ski.EchoMode = textinput.EchoPassword
 	ski.CharLimit = 36
-	ski.Focus()
+	// No Focus() here — browse mode by default
 
 	mui := textinput.New()
 	mui.Placeholder = "https://api.netbird.io"
@@ -246,6 +249,15 @@ func (m *Model) rebuildTables() {
 	}
 }
 
+// isConnected returns true if management is currently connected.
+func (m *Model) isConnected() bool {
+	if m.status == nil || m.status.FullStatus == nil {
+		return false
+	}
+	ms := m.status.FullStatus.ManagementState
+	return ms != nil && ms.Connected
+}
+
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -256,35 +268,70 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rebuildTables()
 
 	case tea.KeyMsg:
-		// Settings tab — delegate most input to textinput
+		// Settings tab — browse/edit mode handling
 		if m.activeTab == tabSettings && m.confirm == "" {
-			switch msg.String() {
-			case "ctrl+s":
-				m.settingsMsg = ""
-				m.loading = true
-				return m, m.doLogin()
-			case "tab", "enter":
-				if m.settingsFocused == 0 {
-					m.settingsFocused = 1
+			if m.settingsEditing {
+				// edit mode
+				switch msg.String() {
+				case "esc":
+					m.settingsEditing = false
 					m.setupKeyInput.Blur()
-					m.mgmtURLInput.Focus()
-				} else {
-					m.settingsFocused = 0
 					m.mgmtURLInput.Blur()
-					m.setupKeyInput.Focus()
+					return m, nil
+				case "ctrl+s":
+					m.settingsMsg = ""
+					m.loading = true
+					return m, m.doLogin()
+				case "ctrl+c":
+					return m, tea.Quit
+				default:
+					var skiCmd, muiCmd tea.Cmd
+					m.setupKeyInput, skiCmd = m.setupKeyInput.Update(msg)
+					m.mgmtURLInput, muiCmd = m.mgmtURLInput.Update(msg)
+					return m, tea.Batch(skiCmd, muiCmd)
 				}
-				return m, nil
-			case "esc":
-				m.activeTab = tabStatus
+			} else {
+				// browse mode
+				switch msg.String() {
+				case "up", "k":
+					if m.settingsFocused > 0 {
+						m.settingsFocused--
+					}
+					return m, nil
+				case "down", "j":
+					if m.settingsFocused < 1 {
+						m.settingsFocused++
+					}
+					return m, nil
+				case "enter":
+					m.settingsEditing = true
+					if m.settingsFocused == 0 {
+						m.setupKeyInput.Focus()
+					} else {
+						m.mgmtURLInput.Focus()
+					}
+					return m, nil
+				case "ctrl+s":
+					m.settingsMsg = ""
+					m.loading = true
+					return m, m.doLogin()
+				// fall through to global handler for everything else
+				default:
+					// handle global keys (tabs, quit, etc.) below
+				}
+			}
+		}
+
+		// Peer detail view
+		if m.activeTab == tabPeers && m.peerDetail && m.confirm == "" {
+			switch msg.String() {
+			case "esc", "enter":
+				m.peerDetail = false
 				return m, nil
 			case "q", "ctrl+c":
 				return m, tea.Quit
-			default:
-				var skiCmd, muiCmd tea.Cmd
-				m.setupKeyInput, skiCmd = m.setupKeyInput.Update(msg)
-				m.mgmtURLInput, muiCmd = m.mgmtURLInput.Update(msg)
-				return m, tea.Batch(skiCmd, muiCmd)
 			}
+			return m, nil
 		}
 
 		// Handle confirmation prompt
@@ -316,10 +363,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "left":
 			if m.activeTab > tabStatus {
 				m.activeTab--
+				m.settingsEditing = false
+				m.setupKeyInput.Blur()
+				m.mgmtURLInput.Blur()
 			}
 		case "right":
 			if m.activeTab < tabSettings {
 				m.activeTab++
+				m.settingsEditing = false
+				m.setupKeyInput.Blur()
+				m.mgmtURLInput.Blur()
 			}
 		case "1":
 			m.activeTab = tabStatus
@@ -332,9 +385,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "5":
 			m.activeTab = tabSettings
 			m.settingsMsg = ""
+			m.settingsEditing = false
+			m.setupKeyInput.Blur()
+			m.mgmtURLInput.Blur()
 		case "r":
 			m.loading = true
 			cmds = append(cmds, m.fetchStatus(), m.fetchNetworks(), m.fetchFwdRules())
+		case "c":
+			if m.isConnected() {
+				m.confirm = "down"
+			} else {
+				m.confirm = "up"
+			}
+			return m, nil
 		case "u":
 			m.confirm = "up"
 			return m, nil
@@ -369,6 +432,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if cmd != nil {
 					return m, cmd
 				}
+			} else if m.activeTab == tabPeers {
+				m.peerDetail = true
+				return m, nil
 			}
 		}
 
@@ -401,6 +467,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case configMsg:
 		if msg.err == nil && msg.cfg != nil {
+			m.config = msg.cfg
 			if m.mgmtURLInput.Value() == "" {
 				m.mgmtURLInput.SetValue(msg.cfg.ManagementUrl)
 			}
@@ -556,6 +623,18 @@ func (m *Model) renderContent() string {
 		if m.status == nil || m.status.FullStatus == nil {
 			return styleNeutral.Padding(1, 2).Render("No peer data available")
 		}
+		if m.peerDetail {
+			row := m.peersTable.SelectedRow()
+			if row != nil {
+				// Find peer by FQDN (first column) or IP (second column)
+				for _, p := range m.status.FullStatus.Peers {
+					if p.Fqdn == row[0] || p.IP == row[1] {
+						return renderPeerDetail(p, m.width)
+					}
+				}
+			}
+			m.peerDetail = false
+		}
 		header := peersHeader(m.status.FullStatus.Peers)
 		return lipgloss.JoinVertical(lipgloss.Left,
 			lipgloss.NewStyle().Padding(0, 2).Render(header),
@@ -581,11 +660,21 @@ func (m *Model) renderFooter() string {
 	var help string
 	switch m.activeTab {
 	case tabRoutes:
-		help = "Enter:Toggle  u:Up  d:Down  L:Logout  b:Debug  r:Refresh  ←→/1-5:Tabs  ↑↓:Nav  q:Quit"
+		help = "Enter:Toggle  c:Toggle  u:Up  d:Down  L:Logout  b:Debug  r:Refresh  ←→/1-5:Tabs  ↑↓:Nav  q:Quit"
 	case tabSettings:
-		help = "Tab:Next field  ctrl+s:Submit  esc:Cancel  q:Quit"
+		if m.settingsEditing {
+			help = "Esc:Stop editing  ctrl+s:Submit"
+		} else {
+			help = "↑↓:Select  Enter:Edit  ctrl+s:Submit  ←→/1-5:Tabs  q:Quit"
+		}
+	case tabPeers:
+		if m.peerDetail {
+			help = "Esc/Enter:Back to list"
+		} else {
+			help = "Enter:Detail  c:Toggle  u:Up  d:Down  L:Logout  b:Debug  r:Refresh  ←→/1-5:Tabs  ↑↓:Nav  q:Quit"
+		}
 	default:
-		help = "u:Up  d:Down  L:Logout  b:Debug  r:Refresh  ←→/1-5:Tabs  ↑↓:Nav  q:Quit"
+		help = "c:Toggle  u:Up  d:Down  L:Logout  b:Debug  r:Refresh  ←→/1-5:Tabs  ↑↓:Nav  q:Quit"
 	}
 	if m.lastAction != "" {
 		help = fmt.Sprintf("Last: %s  |  %s", m.lastAction, help)

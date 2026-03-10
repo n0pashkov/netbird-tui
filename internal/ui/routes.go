@@ -9,7 +9,8 @@ import (
 )
 
 func buildRoutesTable(networks []*proto.Network, width, height int) table.Model {
-	available := width - 6
+	// width - 2 (contentStyle) - 4 (Padding(0,2)) - 8 (4 cols × Padding(0,1) cell style)
+	available := width - 14
 	if available < 50 {
 		available = 50
 	}
