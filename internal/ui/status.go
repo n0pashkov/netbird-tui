@@ -24,7 +24,9 @@ func renderStatus(m *Model) string {
 
 	var sb strings.Builder
 
-	// Management state
+	// ── Connection section ───────────────────────────────────────────────────
+	sb.WriteString(styleSectionHeader.Render("Connection") + "\n")
+
 	sb.WriteString(styleLabel.Render("Management:"))
 	if fs.ManagementState != nil && fs.ManagementState.Connected {
 		sb.WriteString(styleOnline.Render("● Connected"))
@@ -39,7 +41,6 @@ func renderStatus(m *Model) string {
 	}
 	sb.WriteString("\n")
 
-	// Signal state
 	sb.WriteString(styleLabel.Render("Signal:"))
 	if fs.SignalState != nil && fs.SignalState.Connected {
 		sb.WriteString(styleOnline.Render("● Connected"))
@@ -48,12 +49,17 @@ func renderStatus(m *Model) string {
 		}
 	} else {
 		sb.WriteString(styleOffline.Render("○ Disconnected"))
+		if fs.SignalState != nil && fs.SignalState.Error != "" {
+			sb.WriteString(styleError.Render("  " + fs.SignalState.Error))
+		}
 	}
 	sb.WriteString("\n\n")
 
-	// Local peer info
+	// ── Local peer section ───────────────────────────────────────────────────
 	if fs.LocalPeerState != nil {
 		lp := fs.LocalPeerState
+		sb.WriteString(styleSectionHeader.Render("Local Peer") + "\n")
+
 		sb.WriteString(styleLabel.Render("IP:"))
 		sb.WriteString(styleValue.Render(lp.IP))
 		sb.WriteString("\n")
@@ -70,66 +76,126 @@ func renderStatus(m *Model) string {
 		}
 		sb.WriteString("\n")
 
-		// Rosenpass
 		sb.WriteString(styleLabel.Render("Rosenpass:"))
 		if lp.RosenpassEnabled {
-			sb.WriteString(styleOnline.Render("● Enabled"))
+			perm := ""
+			if lp.RosenpassPermissive {
+				perm = " (permissive)"
+			}
+			sb.WriteString(styleOnline.Render("● Enabled") + styleNeutral.Render(perm))
 		} else {
 			sb.WriteString(styleNeutral.Render("○ Disabled"))
 		}
 		sb.WriteString("\n\n")
 	}
 
-	// Peers summary
+	// ── Network summary ──────────────────────────────────────────────────────
+	sb.WriteString(styleSectionHeader.Render("Network") + "\n")
+
 	total := len(fs.Peers)
 	online := 0
+	relayed := 0
 	for _, p := range fs.Peers {
 		if p.ConnStatus == "Connected" {
 			online++
+			if p.Relayed {
+				relayed++
+			}
 		}
 	}
 	sb.WriteString(styleLabel.Render("Peers:"))
 	sb.WriteString(styleValue.Render(fmt.Sprintf("%d online / %d total", online, total)))
+	if relayed > 0 {
+		sb.WriteString(styleNeutral.Render(fmt.Sprintf("  (%d relayed)", relayed)))
+	}
 	sb.WriteString("\n")
+
+	// Routes summary
+	if len(m.networks) > 0 {
+		selected := 0
+		for _, n := range m.networks {
+			if n.Selected {
+				selected++
+			}
+		}
+		sb.WriteString(styleLabel.Render("Routes:"))
+		sb.WriteString(styleValue.Render(fmt.Sprintf("%d selected / %d total", selected, len(m.networks))))
+		sb.WriteString("\n")
+	}
 
 	// Relay states
 	if len(fs.Relays) > 0 {
-		sb.WriteString("\n")
-		sb.WriteString(styleLabel.Render("Relays:") + "\n")
+		avail := 0
 		for _, r := range fs.Relays {
 			if r.Available {
-				sb.WriteString("  " + styleOnline.Render("● ") + styleValue.Render(r.URI) + "\n")
+				avail++
+			}
+		}
+		sb.WriteString(styleLabel.Render("Relays:"))
+		sb.WriteString(styleValue.Render(fmt.Sprintf("%d/%d available", avail, len(fs.Relays))))
+		sb.WriteString("\n")
+		for _, r := range fs.Relays {
+			if r.Available {
+				sb.WriteString("  " + styleOnline.Render("● ") + styleNeutral.Render(r.URI) + "\n")
 			} else {
-				sb.WriteString("  " + styleOffline.Render("○ ") + styleValue.Render(r.URI) + "\n")
+				sb.WriteString("  " + styleOffline.Render("○ ") + styleNeutral.Render(r.URI))
+				if r.Error != "" {
+					sb.WriteString(styleError.Render(" [" + r.Error + "]"))
+				}
+				sb.WriteString("\n")
 			}
 		}
 	}
+	sb.WriteString("\n")
 
-	// DNS servers
+	// ── DNS summary ──────────────────────────────────────────────────────────
 	if len(fs.DnsServers) > 0 {
+		sb.WriteString(styleSectionHeader.Render("DNS") + "\n")
+		errDNS := 0
+		activeDNS := 0
+		for _, ns := range fs.DnsServers {
+			if ns.Enabled {
+				activeDNS++
+			}
+			if ns.Error != "" {
+				errDNS++
+			}
+		}
+		sb.WriteString(styleLabel.Render("Nameservers:"))
+		sb.WriteString(styleValue.Render(fmt.Sprintf("%d groups  •  %d active", len(fs.DnsServers), activeDNS)))
+		if errDNS > 0 {
+			sb.WriteString(styleError.Render(fmt.Sprintf("  •  %d error(s)", errDNS)))
+		}
 		sb.WriteString("\n")
-		sb.WriteString(styleLabel.Render("DNS Servers:") + "\n")
+
 		for _, ns := range fs.DnsServers {
 			for _, srv := range ns.Servers {
 				domains := ""
 				if len(ns.Domains) > 0 {
-					domains = " (" + strings.Join(ns.Domains, ", ") + ")"
+					d := strings.Join(ns.Domains, ", ")
+					if len(d) > 40 {
+						d = d[:40] + "…"
+					}
+					domains = " (" + d + ")"
+				} else {
+					domains = " (match-all)"
 				}
 				if ns.Error != "" {
-					sb.WriteString("  " + styleOffline.Render("○ ") + styleValue.Render(srv) + styleError.Render(" [error: "+ns.Error+"]") + "\n")
+					sb.WriteString("  " + styleOffline.Render("○ ") + styleValue.Render(srv) + styleError.Render(" [err]") + "\n")
 				} else if ns.Enabled {
 					sb.WriteString("  " + styleOnline.Render("● ") + styleValue.Render(srv) + styleNeutral.Render(domains) + "\n")
 				} else {
-					sb.WriteString("  " + styleNeutral.Render("○ ") + styleValue.Render(srv) + styleNeutral.Render(domains) + "\n")
+					sb.WriteString("  " + styleNeutral.Render("○ ") + styleNeutral.Render(srv) + styleNeutral.Render(domains) + "\n")
 				}
 			}
 		}
+		sb.WriteString("\n")
 	}
 
-	// SSH server state
+	// ── SSH server ───────────────────────────────────────────────────────────
 	if fs.SshServerState != nil {
-		sb.WriteString("\n")
-		sb.WriteString(styleLabel.Render("SSH Server:"))
+		sb.WriteString(styleSectionHeader.Render("SSH Server") + "\n")
+		sb.WriteString(styleLabel.Render("Status:"))
 		if fs.SshServerState.Enabled {
 			sessions := len(fs.SshServerState.Sessions)
 			sessionStr := ""
@@ -141,22 +207,29 @@ func renderStatus(m *Model) string {
 				sessionStr += ")"
 			}
 			sb.WriteString(styleOnline.Render("● Enabled") + styleNeutral.Render(sessionStr))
+			for _, sess := range fs.SshServerState.Sessions {
+				sb.WriteString("\n  " + styleNeutral.Render("•") + " " + styleValue.Render(sess.Username+"@"+sess.RemoteAddress))
+			}
 		} else {
 			sb.WriteString(styleNeutral.Render("○ Disabled"))
 		}
-		sb.WriteString("\n")
+		sb.WriteString("\n\n")
 	}
 
-	// System events (last 3)
-	if len(fs.Events) > 0 {
-		sb.WriteString("\n")
-		sb.WriteString(styleLabel.Render("Events:") + "\n")
-		events := fs.Events
-		start := len(events) - 3
+	// ── System events (last 5) ───────────────────────────────────────────────
+	allEvents := fs.Events
+	// Use fresh events from GetEvents if available
+	if len(m.events) > 0 {
+		allEvents = m.events
+	}
+
+	if len(allEvents) > 0 {
+		sb.WriteString(styleSectionHeader.Render(fmt.Sprintf("Recent Events  (%d total, Tab 5 for full list)", len(allEvents))) + "\n")
+		start := len(allEvents) - 5
 		if start < 0 {
 			start = 0
 		}
-		for _, ev := range events[start:] {
+		for _, ev := range allEvents[start:] {
 			icon := "ℹ"
 			evStyle := styleNeutral
 			switch ev.Severity {
@@ -169,14 +242,43 @@ func renderStatus(m *Model) string {
 			}
 			ts := ""
 			if ev.Timestamp != nil {
-				ts = "[" + ev.Timestamp.AsTime().Local().Format("15:04") + "] "
+				ts = "[" + ev.Timestamp.AsTime().Local().Format("15:04:05") + "] "
 			}
 			msg := ev.UserMessage
 			if msg == "" {
 				msg = ev.Message
 			}
+			if len(msg) > 70 {
+				msg = msg[:70] + "…"
+			}
 			sb.WriteString("  " + evStyle.Render(icon+" "+ts+msg) + "\n")
 		}
+	}
+
+	// ── Features (from management) ───────────────────────────────────────────
+	if m.features != nil {
+		sb.WriteString("\n")
+		sb.WriteString(styleSectionHeader.Render("Server Features") + "\n")
+		sb.WriteString(styleLabel.Render("Profiles:"))
+		if m.features.DisableProfiles {
+			sb.WriteString(styleNeutral.Render("Disabled by server"))
+		} else {
+			sb.WriteString(styleOnline.Render("Enabled"))
+		}
+		sb.WriteString("\n")
+		sb.WriteString(styleLabel.Render("Update settings:"))
+		if m.features.DisableUpdateSettings {
+			sb.WriteString(styleNeutral.Render("Disabled by server"))
+		} else {
+			sb.WriteString(styleOnline.Render("Enabled"))
+		}
+		sb.WriteString("\n")
+	}
+
+	// ── Network map (compact) ────────────────────────────────────────────────
+	mapStr := renderNetworkMap(m, m.width-10)
+	if mapStr != "" {
+		sb.WriteString("\n" + mapStr)
 	}
 
 	return lipgloss.NewStyle().Padding(1, 2).Render(sb.String())

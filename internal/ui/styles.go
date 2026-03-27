@@ -10,6 +10,8 @@ var (
 	colorGray   = lipgloss.Color("#6b7280")
 	colorWhite  = lipgloss.Color("#f9fafb")
 	colorBorder = lipgloss.Color("#374151")
+	colorPurple = lipgloss.Color("#a855f7")
+	colorCyan   = lipgloss.Color("#06b6d4")
 
 	styleTitle = lipgloss.NewStyle().
 			Bold(true).
@@ -57,7 +59,12 @@ var (
 	styleError = lipgloss.NewStyle().
 			Foreground(colorRed).
 			Bold(true)
-)
 
-// Ensure styleBox is used (referenced in status.go if needed)
-var _ = styleBox
+	styleSectionHeader = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(colorCyan)
+
+	styleWarning = lipgloss.NewStyle().Foreground(colorYellow)
+
+	stylePurple = lipgloss.NewStyle().Foreground(colorPurple)
+)

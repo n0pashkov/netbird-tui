@@ -139,7 +139,7 @@ func peersHeader(peers []*proto.PeerState) string {
 		online, total, time.Now().Format("15:04:05")))
 }
 
-func renderPeerDetail(peer *proto.PeerState, width int) string {
+func renderPeerDetail(peer *proto.PeerState, width int, sshKey, sshKeyErr string) string {
 	var sb strings.Builder
 
 	lbl := lipgloss.NewStyle().Foreground(colorGray).Width(28)
@@ -221,12 +221,23 @@ func renderPeerDetail(peer *proto.PeerState, width int) string {
 	}
 	sb.WriteString(lbl.Render("Rosenpass:") + val.Render(rosenpass) + "\n")
 
-	// SSH host key
-	sshKey := "absent"
+	// SSH host key (from peer state)
+	sshKeyStatus := "absent"
 	if len(peer.SshHostKey) > 0 {
-		sshKey = "present"
+		sshKeyStatus = "present"
 	}
-	sb.WriteString(lbl.Render("SSH Host Key:") + val.Render(sshKey) + "\n")
+	sb.WriteString(lbl.Render("SSH Host Key:") + val.Render(sshKeyStatus) + "\n")
+
+	// Retrieved SSH host key from daemon
+	if sshKeyErr != "" {
+		sb.WriteString(lbl.Render("SSH Key (fetched):") + styleError.Render("Error: "+sshKeyErr) + "\n")
+	} else if sshKey != "" {
+		displayKey := sshKey
+		if len(displayKey) > 60 {
+			displayKey = displayKey[:60] + "…"
+		}
+		sb.WriteString(lbl.Render("SSH Key (fetched):") + val.Render(displayKey) + "\n")
+	}
 
 	// Networks
 	if len(peer.Networks) > 0 {

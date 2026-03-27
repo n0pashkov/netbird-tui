@@ -1,0 +1,26 @@
+2026-03-28 01:16:56,624 - proxmox-mcp.proxmox - INFO - Connecting to Proxmox host: 10.0.0.11
+2026-03-28 01:16:56,750 - mcp.server.lowlevel.server - DEBUG - Initializing server 'ProxmoxMCP'
+2026-03-28 01:16:56,751 - mcp.server.lowlevel.server - DEBUG - Registering handler for ListToolsRequest
+2026-03-28 01:16:56,751 - mcp.server.lowlevel.server - DEBUG - Registering handler for CallToolRequest
+2026-03-28 01:16:56,751 - mcp.server.lowlevel.server - DEBUG - Registering handler for ListResourcesRequest
+2026-03-28 01:16:56,751 - mcp.server.lowlevel.server - DEBUG - Registering handler for ReadResourceRequest
+2026-03-28 01:16:56,752 - mcp.server.lowlevel.server - DEBUG - Registering handler for PromptListRequest
+2026-03-28 01:16:56,752 - mcp.server.lowlevel.server - DEBUG - Registering handler for GetPromptRequest
+2026-03-28 01:16:56,752 - mcp.server.lowlevel.server - DEBUG - Registering handler for ListResourceTemplatesRequest
+2026-03-28 01:16:56,811 - proxmox-mcp - INFO - Container command execution disabled (no [ssh] section in config)
+2026-03-28 01:16:56,838 - proxmox-mcp - INFO - Starting Proxmox MCP Server with transport: STDIO
+2026-03-28 01:16:56,845 - asyncio - DEBUG - Using selector: EpollSelector
+2026-03-28 01:16:56,861 - mcp.server.lowlevel.server - DEBUG - Received message: root=InitializedNotification(method='notifications/initialized', params=None, jsonrpc='2.0')
+2026-03-28 01:16:56,862 - mcp.server.lowlevel.server - DEBUG - Received message: <mcp.shared.session.RequestResponder object at 0x7f3447f987d0>
+2026-03-28 01:16:56,862 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2026-03-28 01:16:56,863 - mcp.server.lowlevel.server - DEBUG - Dispatching request of type ListToolsRequest
+2026-03-28 01:16:56,864 - mcp.server.lowlevel.server - DEBUG - Response sent
+2026-03-28 01:16:56,865 - mcp.server.lowlevel.server - DEBUG - Received message: <mcp.shared.session.RequestResponder object at 0x7f3447f98690>
+2026-03-28 01:16:56,865 - mcp.server.lowlevel.server - INFO - Processing request of type ListPromptsRequest
+2026-03-28 01:16:56,865 - mcp.server.lowlevel.server - DEBUG - Dispatching request of type ListPromptsRequest
+2026-03-28 01:16:56,866 - mcp.server.lowlevel.server - DEBUG - Received message: <mcp.shared.session.RequestResponder object at 0x7f34480296e0>
+2026-03-28 01:16:56,866 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2026-03-28 01:16:56,866 - mcp.server.lowlevel.server - DEBUG - Dispatching request of type ListResourcesRequest
+2026-03-28 01:16:56,866 - mcp.server.fastmcp.resources.resource_manager - DEBUG - Listing resources
+2026-03-28 01:16:56,867 - mcp.server.lowlevel.server - DEBUG - Response sent
+2026-03-28 01:16:56,868 - mcp.server.lowlevel.server - DEBUG - Response sent

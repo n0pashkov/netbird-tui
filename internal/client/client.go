@@ -69,8 +69,11 @@ func (c *Client) ForwardingRules(ctx context.Context) ([]*proto.ForwardingRule, 
 	return resp.Rules, nil
 }
 
-func (c *Client) DebugBundle(ctx context.Context) (string, error) {
-	resp, err := c.daemon.DebugBundle(ctx, &proto.DebugBundleRequest{})
+func (c *Client) DebugBundle(ctx context.Context, anonymize, systemInfo bool) (string, error) {
+	resp, err := c.daemon.DebugBundle(ctx, &proto.DebugBundleRequest{
+		Anonymize:  anonymize,
+		SystemInfo: systemInfo,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -90,6 +93,122 @@ func (c *Client) Login(ctx context.Context, setupKey, managementURL string) erro
 	_, err := c.daemon.Login(ctx, &proto.LoginRequest{
 		SetupKey:      setupKey,
 		ManagementUrl: managementURL,
+	})
+	return err
+}
+
+// GetLogLevel returns the current daemon log level.
+func (c *Client) GetLogLevel(ctx context.Context) (proto.LogLevel, error) {
+	resp, err := c.daemon.GetLogLevel(ctx, &proto.GetLogLevelRequest{})
+	if err != nil {
+		return proto.LogLevel_UNKNOWN, err
+	}
+	return resp.Level, nil
+}
+
+// SetLogLevel sets the daemon log level.
+func (c *Client) SetLogLevel(ctx context.Context, level proto.LogLevel) error {
+	_, err := c.daemon.SetLogLevel(ctx, &proto.SetLogLevelRequest{Level: level})
+	return err
+}
+
+// ListStates returns internal daemon states.
+func (c *Client) ListStates(ctx context.Context) ([]*proto.State, error) {
+	resp, err := c.daemon.ListStates(ctx, &proto.ListStatesRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return resp.States, nil
+}
+
+// CleanState clears a specific state.
+func (c *Client) CleanState(ctx context.Context, stateName string) error {
+	_, err := c.daemon.CleanState(ctx, &proto.CleanStateRequest{StateName: stateName})
+	return err
+}
+
+// DeleteState deletes a specific state.
+func (c *Client) DeleteState(ctx context.Context, stateName string) error {
+	_, err := c.daemon.DeleteState(ctx, &proto.DeleteStateRequest{StateName: stateName})
+	return err
+}
+
+// TracePacket traces a packet through the firewall rules.
+func (c *Client) TracePacket(ctx context.Context, req *proto.TracePacketRequest) (*proto.TracePacketResponse, error) {
+	return c.daemon.TracePacket(ctx, req)
+}
+
+// GetEvents retrieves system events.
+func (c *Client) GetEvents(ctx context.Context) ([]*proto.SystemEvent, error) {
+	resp, err := c.daemon.GetEvents(ctx, &proto.GetEventsRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Events, nil
+}
+
+// ListProfiles returns all configured profiles.
+func (c *Client) ListProfiles(ctx context.Context) ([]*proto.Profile, error) {
+	resp, err := c.daemon.ListProfiles(ctx, &proto.ListProfilesRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Profiles, nil
+}
+
+// GetActiveProfile returns the name of the currently active profile.
+func (c *Client) GetActiveProfile(ctx context.Context) (string, error) {
+	resp, err := c.daemon.GetActiveProfile(ctx, &proto.GetActiveProfileRequest{})
+	if err != nil {
+		return "", err
+	}
+	return resp.ProfileName, nil
+}
+
+// SwitchProfile switches to the given profile name.
+func (c *Client) SwitchProfile(ctx context.Context, name string) error {
+	_, err := c.daemon.SwitchProfile(ctx, &proto.SwitchProfileRequest{ProfileName: &name})
+	return err
+}
+
+// AddProfile creates a new profile.
+func (c *Client) AddProfile(ctx context.Context, name string) error {
+	_, err := c.daemon.AddProfile(ctx, &proto.AddProfileRequest{
+		ProfileName: name,
+	})
+	return err
+}
+
+// RemoveProfile deletes a profile.
+func (c *Client) RemoveProfile(ctx context.Context, name string) error {
+	_, err := c.daemon.RemoveProfile(ctx, &proto.RemoveProfileRequest{ProfileName: name})
+	return err
+}
+
+// GetFeatures returns feature flags from the management server.
+func (c *Client) GetFeatures(ctx context.Context) (*proto.GetFeaturesResponse, error) {
+	return c.daemon.GetFeatures(ctx, &proto.GetFeaturesRequest{})
+}
+
+// SetConfig applies new configuration settings.
+func (c *Client) SetConfig(ctx context.Context, req *proto.SetConfigRequest) error {
+	_, err := c.daemon.SetConfig(ctx, req)
+	return err
+}
+
+// GetPeerSSHHostKey retrieves the SSH host key for a peer by address.
+func (c *Client) GetPeerSSHHostKey(ctx context.Context, peerAddress string) (string, error) {
+	resp, err := c.daemon.GetPeerSSHHostKey(ctx, &proto.GetPeerSSHHostKeyRequest{PeerAddress: peerAddress})
+	if err != nil {
+		return "", err
+	}
+	return string(resp.SshHostKey), nil
+}
+
+// SetSyncResponsePersistence enables/disables sync response persistence (debug).
+func (c *Client) SetSyncResponsePersistence(ctx context.Context, enable bool) error {
+	_, err := c.daemon.SetSyncResponsePersistence(ctx, &proto.SetSyncResponsePersistenceRequest{
+		Enabled: enable,
 	})
 	return err
 }
