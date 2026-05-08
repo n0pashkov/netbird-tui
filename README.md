@@ -1,81 +1,109 @@
 # netbird-tui
 
-A terminal user interface (TUI) for managing [NetBird](https://netbird.io/) — a WireGuard-based mesh VPN.
-
-Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea) and communicates directly with the local NetBird daemon via gRPC.
+A terminal UI for the local [NetBird](https://netbird.io/) daemon. It uses the daemon gRPC socket directly and keeps common monitoring and management tasks in one keyboard-driven interface.
 
 ## Features
 
-- **Status tab** — management/signal state, local peer info, relay status
-- **Peers tab** — table of all peers with connection status, latency, relay info, and traffic stats
-- **Routes tab** — network routes with select/deselect toggle
-- **Forwarding tab** — forwarding rules (protocol, destination and translated ports/addresses)
-- **Settings tab** — configure setup key and management URL, trigger login
-- NetBird Up / Down with confirmation prompt
-- Logout with confirmation
-- Debug bundle creation
-- Auto-refresh every 5 seconds
-- Adaptive layout — tables resize with the terminal window
+- Two-level navigation with 4 groups and 11 screens.
+- Monitor screens for status, peers, system events, and network map.
+- Network screens for routes, DNS, and forwarding rules.
+- Manage screens for profiles and setup-key login settings.
+- Tools screens for diagnostics, packet tracing, daemon states, and service status.
+- Context-aware footer actions, confirmation prompts for destructive operations, and quick switch/help overlays.
+- Auto-refresh for daemon data with explicit refresh available from the UI.
+
+## Screens
+
+| Group | Screens |
+| --- | --- |
+| Monitor | Status, Peers, Events, Map |
+| Network | Routes, DNS, Forwarding |
+| Manage | Profiles, Settings |
+| Tools | Diagnostics, Services |
 
 ## Requirements
 
-- NetBird daemon running locally (`netbird` service)
-- Access to the NetBird socket (usually `/var/run/netbird.sock`)
+- Go 1.25 or newer for building from source.
+- A running NetBird daemon.
+- Permission to access the daemon socket, usually `unix:///var/run/netbird.sock`.
+
+On most Linux systems the socket is owned by root. Run with `sudo`, adjust group permissions, or pass a socket path that your user can read.
 
 ## Installation
 
+Install with Go:
+
 ```bash
-git clone https://github.com/justniklab/netbird-tui
+go install github.com/n0pashkov/netbird-tui@latest
+```
+
+Build from source:
+
+```bash
+git clone https://github.com/n0pashkov/netbird-tui
 cd netbird-tui
 go build -o netbird-tui .
-sudo ./netbird-tui
 ```
-
-Or run directly:
-
-```bash
-go run . [socket-path]
-```
-
-Default socket path: `unix:///var/run/netbird.sock`
 
 ## Usage
 
-```bash
-# Use default socket
-sudo netbird-tui
+Use the default socket:
 
-# Custom socket path
-sudo netbird-tui unix:///custom/path/netbird.sock
+```bash
+sudo netbird-tui
 ```
+
+Use a custom socket:
+
+```bash
+netbird-tui unix:///custom/path/netbird.sock
+```
+
+Default socket path: `unix:///var/run/netbird.sock`.
 
 ## Keybindings
 
 | Key | Action |
-|-----|--------|
-| `←` / `→` | Switch tabs |
-| `1` – `5` | Jump to tab directly |
-| `↑` / `↓` / `j` / `k` | Navigate table rows |
-| `u` | NetBird Up (with confirmation) |
-| `d` | NetBird Down (with confirmation) |
-| `L` | Logout (with confirmation) |
-| `b` | Create debug bundle (with confirmation) |
-| `r` | Refresh all data |
-| `Enter` | Toggle route selected/deselected (Routes tab) |
-| `Tab` / `Enter` | Next input field (Settings tab) |
-| `ctrl+s` | Submit settings / login (Settings tab) |
-| `esc` | Cancel / go back (Settings tab) |
+| --- | --- |
+| `Tab` / `Shift+Tab` | Switch Monitor, Network, Manage, Tools groups |
+| `1` - `4` | Jump to a group |
+| `Left` / `Right` | Switch screens inside the active group |
+| `g` | Open quick switch overlay for all screens |
+| `m` | Open Map from quick switch |
+| `?` | Open contextual help |
+| `/` | Search inside the current searchable screen |
+| `r` | Refresh current daemon data |
+| `c` | Connect or disconnect depending on current state |
+| `u` / `d` | NetBird up / down with confirmation |
+| `L` | Logout with confirmation |
 | `q` / `ctrl+c` | Quit |
 
-## Tabs
+Screen-specific keys are shown in the footer. The footer only advertises actions available on the current screen.
 
-| # | Tab | Description |
-|---|-----|-------------|
-| 1 | Status | Connection status, peer info, relays |
-| 2 | Peers | All peers with stats |
-| 3 | Routes | Network routes, toggle selection |
-| 4 | Forwarding | Port forwarding rules |
-| 5 | Settings | Setup key, management URL, login |
+## Search And Filters
+
+- Peers: `/` searches by FQDN, IP, or connection status; `f` cycles all, online, offline, and relayed peers; `x` clears search.
+- Events: `/` searches event text; `f` cycles severity filters; `Enter` opens event detail.
+
+## Troubleshooting
+
+- `Failed to connect to NetBird daemon`: verify the daemon is running and the socket path is correct.
+- `permission denied`: run with `sudo` or grant your user access to `/var/run/netbird.sock`.
+- Empty screens: refresh with `r`; some screens depend on daemon or management-server support.
+- Settings config flags are read-only in this release. Use `netbird config set` for config changes.
+- Services shows forwarding rules and local service status. Creating exposed services is not enabled in this release.
+
+## Development
+
+```bash
+GOCACHE=/tmp/netbird-tui-gocache go test ./...
+go vet ./...
+go build -o /tmp/netbird-tui .
+```
+
+## Demo
+
+A screenshot or terminal recording can be added to this section when publishing release assets.
 
 ## License
 

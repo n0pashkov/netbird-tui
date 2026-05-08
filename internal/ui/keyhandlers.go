@@ -17,10 +17,8 @@ func (m *Model) handleSettingsKey(msg tea.KeyMsg) tea.Cmd {
 			m.settingsMsg = ""
 			m.loading = true
 			return m.doLogin()
-		case "ctrl+a":
-			return m.doSaveConfig()
 		case "tab":
-			maxFields := 2 + 16 // login fields + config toggle fields
+			maxFields := 2
 			m.settingsFocused = (m.settingsFocused + 1) % maxFields
 			m.focusSettingsField()
 			return nil
@@ -44,8 +42,6 @@ func (m *Model) handleSettingsKey(msg tea.KeyMsg) tea.Cmd {
 		m.settingsMsg = ""
 		m.loading = true
 		return m.doLogin()
-	case "ctrl+a":
-		return m.doSaveConfig()
 	case "pgup":
 		if m.settingsPage > 0 {
 			m.settingsPage--
@@ -85,16 +81,6 @@ func (m *Model) updateSettingsInput(msg tea.KeyMsg) tea.Cmd {
 		cmds = append(cmds, c)
 	}
 	return tea.Batch(cmds...)
-}
-
-func (m *Model) doSaveConfig() tea.Cmd {
-	if m.config == nil {
-		return nil
-	}
-	// Build SetConfigRequest with values from current config (read-only toggle display)
-	// For now just refresh config
-	m.loading = true
-	return m.fetchConfig()
 }
 
 // handleProfilesKey handles keyboard input for the Profiles tab.
@@ -327,6 +313,27 @@ func (m *Model) handleStatesKey(msg tea.KeyMsg) tea.Cmd {
 
 // handleEventsKey handles keyboard input for the Events tab.
 func (m *Model) handleEventsKey(msg tea.KeyMsg) tea.Cmd {
+	if m.eventsSearching {
+		switch msg.String() {
+		case "esc":
+			m.eventsSearching = false
+			m.eventsSearch.SetValue("")
+			m.eventsSearch.Blur()
+			m.eventsTable = buildEventsTable(m.events, m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
+			return nil
+		case "enter":
+			m.eventsSearching = false
+			m.eventsSearch.Blur()
+			m.eventsTable = buildEventsTable(m.events, m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
+			return nil
+		default:
+			var c tea.Cmd
+			m.eventsSearch, c = m.eventsSearch.Update(msg)
+			m.eventsTable = buildEventsTable(m.events, m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
+			return c
+		}
+	}
+
 	if m.eventsDetail {
 		switch msg.String() {
 		case "esc", "enter":
@@ -366,10 +373,20 @@ func (m *Model) handleEventsKey(msg tea.KeyMsg) tea.Cmd {
 		default:
 			m.eventsFilter = -1
 		}
-		m.eventsTable = buildEventsTable(m.events, m.eventsFilter, m.width, m.height)
+		m.eventsTable = buildEventsTable(m.events, m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
 		return nil
 	case "r":
 		return m.fetchEvents()
+	case "/":
+		m.eventsSearching = true
+		m.eventsSearch.Focus()
+		return nil
+	case "x":
+		m.eventsSearch.SetValue("")
+		m.eventsSearching = false
+		m.eventsSearch.Blur()
+		m.eventsTable = buildEventsTable(m.events, m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
+		return nil
 	default:
 		return m.handleGlobalKey(msg)
 	}
@@ -378,74 +395,12 @@ func (m *Model) handleEventsKey(msg tea.KeyMsg) tea.Cmd {
 
 // handleServicesKey handles keyboard input for the Services tab.
 func (m *Model) handleServicesKey(msg tea.KeyMsg) tea.Cmd {
-	if m.svcEditing {
-		switch msg.String() {
-		case "esc":
-			m.svcEditing = false
-			m.clearSvcInputs()
-			return nil
-		case "tab":
-			m.svcFocused = (m.svcFocused + 1) % 4
-			m.focusSvcField()
-			return nil
-		case "ctrl+s":
-			m.svcMsg = "Service exposure is initiated via daemon stream (view logs)"
-			m.svcEditing = false
-			m.clearSvcInputs()
-			return nil
-		default:
-			return m.updateSvcInput(msg)
-		}
-	}
-
 	switch msg.String() {
-	case "n":
-		m.svcEditing = true
-		m.svcFocused = 0
-		m.svcMsg = ""
-		m.focusSvcField()
 	case "r":
 		return m.fetchFwdRules()
 	default:
 		return m.handleGlobalKey(msg)
 	}
-	return nil
-}
-
-func (m *Model) clearSvcInputs() {
-	m.svcPortInput.Blur()
-	m.svcProtoInput.Blur()
-	m.svcGroupInput.Blur()
-	m.svcDomainInput.Blur()
-}
-
-func (m *Model) focusSvcField() {
-	m.clearSvcInputs()
-	switch m.svcFocused {
-	case 0:
-		m.svcPortInput.Focus()
-	case 1:
-		m.svcProtoInput.Focus()
-	case 2:
-		m.svcGroupInput.Focus()
-	case 3:
-		m.svcDomainInput.Focus()
-	}
-}
-
-func (m *Model) updateSvcInput(msg tea.KeyMsg) tea.Cmd {
-	var c tea.Cmd
-	switch m.svcFocused {
-	case 0:
-		m.svcPortInput, c = m.svcPortInput.Update(msg)
-	case 1:
-		m.svcProtoInput, c = m.svcProtoInput.Update(msg)
-	case 2:
-		m.svcGroupInput, c = m.svcGroupInput.Update(msg)
-	case 3:
-		m.svcDomainInput, c = m.svcDomainInput.Update(msg)
-	}
-	return c
 }
 
 // nextLogLevel cycles log levels up or down.

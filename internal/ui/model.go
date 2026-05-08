@@ -3,6 +3,8 @@ package ui
 import (
 	"context"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/netbirdio/netbird/client/proto"
 	"netbird-tui/internal/client"
 )
@@ -28,9 +31,61 @@ const (
 	tabServices               // 8
 	tabFwdRules               // 9
 	tabSettings               // 0
+	tabNetMap
 )
 
-const tabCount = 10
+const tabCount = 11
+
+type tabGroup int
+
+const (
+	groupMonitor tabGroup = iota
+	groupNetwork
+	groupManage
+	groupTools
+)
+
+type tabDef struct {
+	id    tab
+	group tabGroup
+	name  string
+	key   string
+}
+
+var tabGroups = []struct {
+	id   tabGroup
+	name string
+	key  string
+	tabs []tab
+}{
+	{groupMonitor, "Monitor", "1", []tab{tabStatus, tabPeers, tabEvents, tabNetMap}},
+	{groupNetwork, "Network", "2", []tab{tabRoutes, tabDNS, tabFwdRules}},
+	{groupManage, "Manage", "3", []tab{tabProfiles, tabSettings}},
+	{groupTools, "Tools", "4", []tab{tabDiagnostics, tabServices}},
+}
+
+var tabs = []tabDef{
+	{tabStatus, groupMonitor, "Status", "1"},
+	{tabPeers, groupMonitor, "Peers", "2"},
+	{tabEvents, groupMonitor, "Events", "3"},
+	{tabNetMap, groupMonitor, "Map", "m"},
+	{tabRoutes, groupNetwork, "Routes", "4"},
+	{tabDNS, groupNetwork, "DNS", "5"},
+	{tabFwdRules, groupNetwork, "Forwarding", "6"},
+	{tabProfiles, groupManage, "Profiles", "7"},
+	{tabSettings, groupManage, "Settings", "8"},
+	{tabDiagnostics, groupTools, "Diagnostics", "9"},
+	{tabServices, groupTools, "Services", "0"},
+}
+
+type peerFilterMode int
+
+const (
+	peerFilterAll peerFilterMode = iota
+	peerFilterOnline
+	peerFilterOffline
+	peerFilterRelayed
+)
 
 // ─── Message types ─────────────────────────────────────────────────────────────
 
@@ -93,7 +148,6 @@ type featuresMsg struct {
 	features *proto.GetFeaturesResponse
 	err      error
 }
-type setConfigMsg struct{ err error }
 type sshHostKeyMsg struct {
 	key string
 	err error
@@ -128,17 +182,22 @@ type Model struct {
 	lastAction string
 
 	// Confirmation
-	confirm string // pending confirmation action
+	confirm     string // pending confirmation action
+	quickSwitch bool
+	helpOverlay bool
 
 	// ── Status tab ──
 	status   *proto.StatusResponse
 	features *proto.GetFeaturesResponse
 
 	// ── Peers tab ──
-	peersTable    table.Model
-	peerDetail    bool
-	peerSSHKey    string
-	peerSSHKeyErr string
+	peersTable     table.Model
+	peerDetail     bool
+	peerSSHKey     string
+	peerSSHKeyErr  string
+	peersSearch    textinput.Model
+	peersSearching bool
+	peersFilter    peerFilterMode
 
 	// ── Routes tab ──
 	networks    []*proto.Network
@@ -149,11 +208,13 @@ type Model struct {
 	dnsSelected int
 
 	// ── Events tab ──
-	events       []*proto.SystemEvent
-	eventsTable  table.Model
-	eventsFilter proto.SystemEvent_Severity // -1 = all (since 0 == INFO)
-	eventsDetail bool
-	eventsScroll int
+	events          []*proto.SystemEvent
+	eventsTable     table.Model
+	eventsFilter    proto.SystemEvent_Severity // -1 = all (since 0 == INFO)
+	eventsSearch    textinput.Model
+	eventsSearching bool
+	eventsDetail    bool
+	eventsScroll    int
 
 	// ── Profiles tab ──
 	profiles         []*proto.Profile
@@ -185,16 +246,8 @@ type Model struct {
 	traceEditing bool
 
 	// ── Services tab ──
-	fwdRules    []*proto.ForwardingRule
-	fwdTable    table.Model
-	// Service exposure sub-form is in services.go
-	svcPortInput   textinput.Model
-	svcProtoInput  textinput.Model
-	svcGroupInput  textinput.Model
-	svcDomainInput textinput.Model
-	svcFocused     int
-	svcEditing     bool
-	svcMsg         string
+	fwdRules []*proto.ForwardingRule
+	fwdTable table.Model
 
 	// ── Settings tab ──
 	config          *proto.GetConfigResponse
@@ -211,6 +264,15 @@ func New(c *client.Client) *Model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(colorBlue)
+
+	// Peers search
+	ps := textinput.New()
+	ps.Placeholder = "search by FQDN or IP…"
+	ps.CharLimit = 64
+
+	es := textinput.New()
+	es.Placeholder = "search events…"
+	es.CharLimit = 96
 
 	ski := textinput.New()
 	ski.Placeholder = "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
@@ -255,23 +317,6 @@ func New(c *client.Client) *Model {
 	tDir.Placeholder = "in"
 	tDir.CharLimit = 10
 
-	// Service expose inputs
-	sPort := textinput.New()
-	sPort.Placeholder = "8080"
-	sPort.CharLimit = 5
-
-	sProto := textinput.New()
-	sProto.Placeholder = "tcp"
-	sProto.CharLimit = 10
-
-	sGroup := textinput.New()
-	sGroup.Placeholder = "All (comma-separated)"
-	sGroup.CharLimit = 256
-
-	sDomain := textinput.New()
-	sDomain.Placeholder = "optional.domain.example"
-	sDomain.CharLimit = 256
-
 	return &Model{
 		client:           c,
 		spinner:          sp,
@@ -287,11 +332,9 @@ func New(c *client.Client) *Model {
 		traceSrcPort:     tSPort,
 		traceDstPort:     tDPort,
 		traceDir:         tDir,
-		svcPortInput:     sPort,
-		svcProtoInput:    sProto,
-		svcGroupInput:    sGroup,
-		svcDomainInput:   sDomain,
 		eventsFilter:     -1,
+		eventsSearch:     es,
+		peersSearch:      ps,
 	}
 }
 
@@ -528,6 +571,18 @@ func (m *Model) doDeleteState(name string) tea.Cmd {
 }
 
 func (m *Model) doTracePacket() tea.Cmd {
+	if err := validateTraceInput(
+		m.traceSrcIP.Value(),
+		m.traceDstIP.Value(),
+		m.traceProto.Value(),
+		m.traceSrcPort.Value(),
+		m.traceDstPort.Value(),
+		m.traceDir.Value(),
+	); err != nil {
+		m.loading = false
+		m.traceErr = err.Error()
+		return nil
+	}
 	srcIP := m.traceSrcIP.Value()
 	dstIP := m.traceDstIP.Value()
 	proto_ := m.traceProto.Value()
@@ -560,12 +615,43 @@ func (m *Model) doTracePacket() tea.Cmd {
 	}
 }
 
-func (m *Model) doSetConfig(req *proto.SetConfigRequest) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		return setConfigMsg{err: m.client.SetConfig(ctx, req)}
+func validateTraceInput(srcIP, dstIP, protoName, srcPort, dstPort, dir string) error {
+	if net.ParseIP(strings.TrimSpace(srcIP)) == nil {
+		return fmt.Errorf("source IP is invalid")
 	}
+	if net.ParseIP(strings.TrimSpace(dstIP)) == nil {
+		return fmt.Errorf("destination IP is invalid")
+	}
+	protoName = strings.ToLower(strings.TrimSpace(protoName))
+	if protoName == "" {
+		protoName = "tcp"
+	}
+	if protoName != "tcp" && protoName != "udp" && protoName != "icmp" {
+		return fmt.Errorf("protocol must be tcp, udp, or icmp")
+	}
+	dir = strings.ToLower(strings.TrimSpace(dir))
+	if dir == "" {
+		dir = "in"
+	}
+	if dir != "in" && dir != "out" {
+		return fmt.Errorf("direction must be in or out")
+	}
+	for _, item := range []struct {
+		name  string
+		value string
+	}{
+		{"source port", srcPort},
+		{"destination port", dstPort},
+	} {
+		if strings.TrimSpace(item.value) == "" {
+			continue
+		}
+		p, err := strconv.Atoi(item.value)
+		if err != nil || p < 0 || p > 65535 {
+			return fmt.Errorf("%s must be 0-65535", item.name)
+		}
+	}
+	return nil
 }
 
 func (m *Model) doGetSSHHostKey(peerAddr string) tea.Cmd {
@@ -581,7 +667,7 @@ func (m *Model) doGetSSHHostKey(peerAddr string) tea.Cmd {
 
 func (m *Model) rebuildTables() {
 	if m.status != nil && m.status.FullStatus != nil {
-		m.peersTable = buildPeersTable(m.status.FullStatus.Peers, m.width, m.height)
+		m.rebuildPeersTableKeepingSelection()
 	}
 	if m.networks != nil {
 		m.routesTable = buildRoutesTable(m.networks, m.width, m.height)
@@ -590,13 +676,47 @@ func (m *Model) rebuildTables() {
 		m.fwdTable = buildFwdTable(m.fwdRules, m.width, m.height)
 	}
 	if m.events != nil {
-		m.eventsTable = buildEventsTable(m.events, m.eventsFilter, m.width, m.height)
+		m.eventsTable = buildEventsTable(m.events, m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
 	}
 	if m.profiles != nil {
 		m.profilesTable = buildProfilesTable(m.profiles, m.activeProfile, m.width, m.height)
 	}
 	if m.states != nil {
 		m.statesTable = buildStatesTable(m.states, m.width, m.height)
+	}
+}
+
+func (m *Model) filteredPeers() []*proto.PeerState {
+	if m.status == nil || m.status.FullStatus == nil {
+		return nil
+	}
+	return filterPeers(m.status.FullStatus.Peers, m.peersSearch.Value(), m.peersFilter)
+}
+
+func (m *Model) selectedPeer() *proto.PeerState {
+	peers := m.filteredPeers()
+	idx := m.peersTable.Cursor()
+	if idx < 0 || idx >= len(peers) {
+		return nil
+	}
+	return peers[idx]
+}
+
+func (m *Model) rebuildPeersTableKeepingSelection() {
+	selectedKey := ""
+	if peer := m.selectedPeer(); peer != nil {
+		selectedKey = peer.Fqdn + "\x00" + peer.IP
+	}
+	peers := m.filteredPeers()
+	m.peersTable = buildPeersTable(peers, m.width, m.height)
+	if selectedKey == "" {
+		return
+	}
+	for i, p := range peers {
+		if p.Fqdn+"\x00"+p.IP == selectedKey {
+			m.peersTable.SetCursor(i)
+			return
+		}
 	}
 }
 
@@ -620,6 +740,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.rebuildTables()
+		cmds = append(cmds, tea.ClearScreen)
 
 	case tea.KeyMsg:
 		// Global quit always works
@@ -641,10 +762,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.err = msg.err
 		} else {
-			m.err = nil
 			m.status = msg.status
 			if m.status != nil && m.status.FullStatus != nil {
-				m.peersTable = buildPeersTable(m.status.FullStatus.Peers, m.width, m.height)
+				m.rebuildPeersTableKeepingSelection()
 			}
 		}
 
@@ -671,7 +791,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case eventsMsg:
 		if msg.err == nil {
 			m.events = msg.events
-			m.eventsTable = buildEventsTable(m.events, m.eventsFilter, m.width, m.height)
+			m.eventsTable = buildEventsTable(m.events, m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
 		}
 
 	case profilesMsg:
@@ -807,15 +927,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.traceErr = ""
 		}
 
-	case setConfigMsg:
-		m.loading = false
-		if msg.err != nil {
-			m.settingsMsg = "Error: " + msg.err.Error()
-		} else {
-			m.settingsMsg = "Config saved"
-			cmds = append(cmds, m.fetchConfig())
-		}
-
 	case sshHostKeyMsg:
 		if msg.err != nil {
 			m.peerSSHKeyErr = msg.err.Error()
@@ -838,6 +949,12 @@ func (m *Model) handleTabKey(msg tea.KeyMsg) tea.Cmd {
 	// Confirmation overlay takes priority
 	if m.confirm != "" {
 		return m.handleConfirm(msg)
+	}
+	if m.helpOverlay {
+		return m.handleHelpOverlay(msg)
+	}
+	if m.quickSwitch {
+		return m.handleQuickSwitch(msg)
 	}
 
 	// Tab-specific handlers
@@ -902,44 +1019,130 @@ func (m *Model) handleConfirm(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+func (m *Model) handleHelpOverlay(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "ctrl+c":
+		return tea.Quit
+	default:
+		m.helpOverlay = false
+	}
+	return nil
+}
+
+func (m *Model) handleQuickSwitch(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "ctrl+c":
+		return tea.Quit
+	case "esc", "g", "q":
+		m.quickSwitch = false
+	case "1", "2", "3", "4":
+		m.quickSwitch = false
+		m.setActiveGroup(tabGroups[int(msg.String()[0]-'1')].id)
+	case "5", "6", "7", "8", "9", "0":
+		for _, td := range tabs {
+			if td.key == msg.String() {
+				m.quickSwitch = false
+				m.setActiveTab(td.id)
+				break
+			}
+		}
+	case "m":
+		m.quickSwitch = false
+		m.setActiveTab(tabNetMap)
+	}
+	return nil
+}
+
+func (m *Model) activeGroup() tabGroup {
+	for _, td := range tabs {
+		if td.id == m.activeTab {
+			return td.group
+		}
+	}
+	return groupMonitor
+}
+
+func (m *Model) activeGroupIndex() int {
+	active := m.activeGroup()
+	for i, g := range tabGroups {
+		if g.id == active {
+			return i
+		}
+	}
+	return 0
+}
+
+func (m *Model) switchGroup(delta int) {
+	idx := m.activeGroupIndex()
+	idx = (idx + delta + len(tabGroups)) % len(tabGroups)
+	m.setActiveGroup(tabGroups[idx].id)
+}
+
+func (m *Model) setActiveGroup(group tabGroup) {
+	for _, g := range tabGroups {
+		if g.id == group && len(g.tabs) > 0 {
+			m.setActiveTab(g.tabs[0])
+			return
+		}
+	}
+}
+
+func (m *Model) switchTabInGroup(delta int) {
+	for _, g := range tabGroups {
+		if g.id != m.activeGroup() {
+			continue
+		}
+		idx := 0
+		for i, t := range g.tabs {
+			if t == m.activeTab {
+				idx = i
+				break
+			}
+		}
+		idx = (idx + delta + len(g.tabs)) % len(g.tabs)
+		m.setActiveTab(g.tabs[idx])
+		return
+	}
+}
+
+func tabName(t tab) string {
+	for _, td := range tabs {
+		if td.id == t {
+			return td.name
+		}
+	}
+	return ""
+}
+
 func (m *Model) handleGlobalKey(msg tea.KeyMsg) tea.Cmd {
 	var cmds []tea.Cmd
 
 	switch msg.String() {
 	case "q":
 		return tea.Quit
+	case "tab":
+		m.switchGroup(1)
+	case "shift+tab":
+		m.switchGroup(-1)
 	case "left":
-		if m.activeTab > tabStatus {
-			m.activeTab--
-			m.clearTabInputFocus()
-		}
+		m.switchTabInGroup(-1)
 	case "right":
-		if m.activeTab < tab(tabCount-1) {
-			m.activeTab++
-			m.clearTabInputFocus()
-		}
+		m.switchTabInGroup(1)
 	case "1":
-		m.setActiveTab(tabStatus)
+		m.setActiveGroup(groupMonitor)
 	case "2":
-		m.setActiveTab(tabPeers)
+		m.setActiveGroup(groupNetwork)
 	case "3":
-		m.setActiveTab(tabRoutes)
+		m.setActiveGroup(groupManage)
 	case "4":
-		m.setActiveTab(tabDNS)
-	case "5":
-		m.setActiveTab(tabEvents)
-	case "6":
-		m.setActiveTab(tabProfiles)
-	case "7":
-		m.setActiveTab(tabDiagnostics)
-	case "8":
-		m.setActiveTab(tabServices)
-	case "9":
-		m.setActiveTab(tabFwdRules)
-	case "0":
-		m.setActiveTab(tabSettings)
+		m.setActiveGroup(groupTools)
+	case "g":
+		m.quickSwitch = true
+	case "?":
+		m.helpOverlay = true
 	case "r":
 		m.loading = true
+		m.err = nil
 		cmds = append(cmds, m.fetchStatus(), m.fetchNetworks(), m.fetchFwdRules(), m.fetchEvents(), m.fetchProfiles(), m.fetchStates())
 	case "c":
 		if m.isConnected() {
@@ -1034,9 +1237,8 @@ func (m *Model) handleEnter() tea.Cmd {
 			m.peerSSHKey = ""
 			m.peerSSHKeyErr = ""
 			// Fetch SSH host key for this peer
-			row := m.peersTable.SelectedRow()
-			if row != nil && len(row) > 1 {
-				return m.doGetSSHHostKey(row[1]) // IP in col 1
+			if peer := m.selectedPeer(); peer != nil {
+				return m.doGetSSHHostKey(peer.IP)
 			}
 		}
 	case tabEvents:
@@ -1044,17 +1246,25 @@ func (m *Model) handleEnter() tea.Cmd {
 			m.eventsDetail = true
 			m.eventsScroll = 0
 		}
+	case tabNetMap:
+		m.setActiveTab(tabPeers)
 	}
 	return nil
 }
 
 func (m *Model) setActiveTab(t tab) {
 	m.activeTab = t
+	m.quickSwitch = false
+	m.helpOverlay = false
 	m.clearTabInputFocus()
 	m.settingsEditing = false
 }
 
 func (m *Model) clearTabInputFocus() {
+	m.peersSearch.Blur()
+	m.peersSearching = false
+	m.eventsSearch.Blur()
+	m.eventsSearching = false
 	m.setupKeyInput.Blur()
 	m.mgmtURLInput.Blur()
 	m.profileNameInput.Blur()
@@ -1065,14 +1275,9 @@ func (m *Model) clearTabInputFocus() {
 	m.traceSrcPort.Blur()
 	m.traceDstPort.Blur()
 	m.traceDir.Blur()
-	m.svcPortInput.Blur()
-	m.svcProtoInput.Blur()
-	m.svcGroupInput.Blur()
-	m.svcDomainInput.Blur()
 	m.settingsEditing = false
 	m.profilesEditing = false
 	m.traceEditing = false
-	m.svcEditing = false
 }
 
 // ─── View ─────────────────────────────────────────────────────────────────────
@@ -1082,28 +1287,60 @@ func (m *Model) View() string {
 		return "Loading..."
 	}
 
-	var sections []string
-	sections = append(sections, m.renderHeader())
-	sections = append(sections, m.renderTabBar())
+	header := fitContentWidth(m.renderHeader(), m.width)
+	tabBar := fitContentWidth(m.renderTabBar(), m.width)
+	footer := fitContentWidth(m.renderFooter(), m.width)
+	if m.confirm != "" {
+		footer = fitContentWidth(m.renderConfirm(), m.width)
+	} else if m.quickSwitch {
+		footer = fitContentWidth(m.renderQuickSwitch(), m.width)
+	} else if m.helpOverlay {
+		footer = fitContentWidth(m.renderHelpOverlay(), m.width)
+	}
 
-	contentHeight := m.height - 10
+	contentHeight := m.height - lipgloss.Height(header) - lipgloss.Height(tabBar) - lipgloss.Height(footer)
 	if contentHeight < 5 {
 		contentHeight = 5
 	}
 
-	content := m.renderContent()
+	content := fitContentBox(m.renderContent(), m.width, contentHeight)
 	contentStyle := lipgloss.NewStyle().
 		Height(contentHeight).
 		Width(m.width - 2)
-	sections = append(sections, contentStyle.Render(content))
 
-	if m.confirm != "" {
-		sections = append(sections, m.renderConfirm())
-	} else {
-		sections = append(sections, m.renderFooter())
+	return lipgloss.JoinVertical(lipgloss.Left,
+		header,
+		tabBar,
+		contentStyle.Render(content),
+		footer,
+	)
+}
+
+func fitContentBox(content string, width, height int) string {
+	if height <= 0 {
+		return ""
 	}
+	lines := strings.Split(fitContentWidth(content, width), "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+		lines[height-1] = ansi.Truncate(styleNeutral.Render("..."), width, "")
+		return strings.Join(lines, "\n")
+	}
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	return strings.Join(lines, "\n")
+}
 
-	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+func fitContentWidth(content string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		lines[i] = ansi.Truncate(line, width, "")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m *Model) renderHeader() string {
@@ -1125,7 +1362,11 @@ func (m *Model) renderHeader() string {
 			fqdn := fs.LocalPeerState.Fqdn
 			mgmt := fs.ManagementState
 			if mgmt != nil && mgmt.Connected {
-				status = styleOnline.Render("● Connected") + styleNeutral.Render("  "+ip+"  "+fqdn)
+				statusText := "  " + ip
+				if m.width >= 96 {
+					statusText += "  " + fqdn
+				}
+				status = styleOnline.Render("● Connected") + styleNeutral.Render(statusText)
 			} else {
 				status = styleOffline.Render("○ Disconnected") + styleNeutral.Render("  "+ip)
 			}
@@ -1141,56 +1382,38 @@ func (m *Model) renderHeader() string {
 }
 
 func (m *Model) renderTabBar() string {
-	// Two rows of tabs: 1-5 and 6-0
-	row1 := []struct {
-		id    tab
-		label string
-		key   string
-	}{
-		{tabStatus, "Status", "1"},
-		{tabPeers, "Peers", "2"},
-		{tabRoutes, "Routes", "3"},
-		{tabDNS, "DNS", "4"},
-		{tabEvents, "Events", "5"},
-	}
-	row2 := []struct {
-		id    tab
-		label string
-		key   string
-	}{
-		{tabProfiles, "Profiles", "6"},
-		{tabDiagnostics, "Diagnostics", "7"},
-		{tabServices, "Services", "8"},
-		{tabFwdRules, "Forwarding", "9"},
-		{tabSettings, "Settings", "0"},
+	activeGroup := m.activeGroup()
+	var groupParts []string
+	for _, g := range tabGroups {
+		lbl := fmt.Sprintf("[%s] %s", g.key, g.name)
+		if g.id == activeGroup {
+			groupParts = append(groupParts, styleActiveTab.Render(lbl))
+		} else {
+			groupParts = append(groupParts, styleInactiveTab.Render(lbl))
+		}
 	}
 
-	renderRow := func(items []struct {
-		id    tab
-		label string
-		key   string
-	}) string {
-		var parts []string
-		for _, t := range items {
-			lbl := fmt.Sprintf("[%s] %s", t.key, t.label)
-			if m.activeTab == t.id {
-				parts = append(parts, styleActiveTab.Render(lbl))
+	var screenParts []string
+	for _, g := range tabGroups {
+		if g.id != activeGroup {
+			continue
+		}
+		for _, t := range g.tabs {
+			lbl := tabName(t)
+			if m.activeTab == t {
+				screenParts = append(screenParts, styleActiveTab.Render("● "+lbl))
 			} else {
-				parts = append(parts, styleInactiveTab.Render(lbl))
+				screenParts = append(screenParts, styleInactiveTab.Render("○ "+lbl))
 			}
 		}
-		return strings.Join(parts, "  ")
 	}
-
-	r1 := renderRow(row1)
-	r2 := renderRow(row2)
 
 	return styleNeutral.
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(colorBorder).
 		BorderBottom(true).
 		Width(m.width - 2).
-		Render(r1 + "\n" + r2)
+		Render(strings.Join(groupParts, "  ") + "\n" + strings.Join(screenParts, "  "))
 }
 
 func (m *Model) renderContent() string {
@@ -1205,6 +1428,8 @@ func (m *Model) renderContent() string {
 		return renderDNS(m)
 	case tabEvents:
 		return renderEvents(m)
+	case tabNetMap:
+		return renderNetworkMap(m, m.width-4)
 	case tabProfiles:
 		return renderProfiles(m)
 	case tabDiagnostics:
@@ -1224,19 +1449,33 @@ func (m *Model) renderPeers() string {
 		return styleNeutral.Padding(1, 2).Render("No peer data available")
 	}
 	if m.peerDetail {
-		row := m.peersTable.SelectedRow()
-		if row != nil {
-			for _, p := range m.status.FullStatus.Peers {
-				if p.Fqdn == row[0] || p.IP == row[1] {
-					return renderPeerDetail(p, m.width, m.peerSSHKey, m.peerSSHKeyErr)
-				}
-			}
+		if peer := m.selectedPeer(); peer != nil {
+			return renderPeerDetail(peer, m.width, m.peerSSHKey, m.peerSSHKeyErr)
 		}
 		m.peerDetail = false
 	}
-	header := peersHeader(m.status.FullStatus.Peers)
+
+	peers := m.status.FullStatus.Peers
+	searchQuery := m.peersSearch.Value()
+	filtered := m.filteredPeers()
+
+	header := peersHeader(peers)
+	searchBar := ""
+	if m.peersSearching {
+		searchBar = "  " + styleNeutral.Render("Search: ") + m.peersSearch.View() + "  " + styleNeutral.Render("Enter:apply  Esc:clear")
+	} else {
+		searchBar = styleNeutral.Render(fmt.Sprintf("  Filter: %s  •  / search", peerFilterLabel(m.peersFilter)))
+		if searchQuery != "" || m.peersFilter != peerFilterAll {
+			searchBar = styleNeutral.Render(fmt.Sprintf("  Showing %d/%d  •  filter: %s", len(filtered), len(peers), peerFilterLabel(m.peersFilter)))
+			if searchQuery != "" {
+				searchBar += styleNeutral.Render(fmt.Sprintf("  •  search: %q", searchQuery))
+			}
+		}
+	}
+
 	return lipgloss.JoinVertical(lipgloss.Left,
 		lipgloss.NewStyle().Padding(0, 2).Render(header),
+		lipgloss.NewStyle().Padding(0, 2).Render(searchBar),
 		lipgloss.NewStyle().Padding(0, 2).Render(m.peersTable.View()),
 	)
 }
@@ -1261,32 +1500,35 @@ func (m *Model) renderFwdRules() string {
 
 func (m *Model) renderFooter() string {
 	var help string
+	nav := "Tab/S-Tab:Groups  ←→:Screens  g:Switch  ?:Help  q:Quit"
 	switch m.activeTab {
 	case tabRoutes:
-		help = "Enter:Toggle  ↑↓:Nav  c:Connect  u:Up  d:Down  r:Refresh  ←→/1-0:Tabs  q:Quit"
+		help = "Enter:Toggle  ↑↓:Nav  r:Refresh  " + nav
 	case tabSettings:
 		if m.settingsEditing {
-			help = "Esc:Cancel  Tab:NextField  ctrl+s:Save Login  ctrl+a:Save Config"
+			help = "Esc:Cancel  Tab:Next field  ctrl+s:Login"
 		} else {
-			help = "↑↓/Tab:Select  Enter:Edit  ctrl+s:Login  ←→/1-0:Tabs  q:Quit"
+			help = "↑↓:Select  Enter:Edit  ctrl+s:Login  PgUp/PgDn:Page  " + nav
 		}
 	case tabPeers:
 		if m.peerDetail {
-			help = "Esc/Enter:Back"
+			help = "Esc/Enter:Back  " + nav
 		} else {
-			help = "Enter:Detail  ↑↓:Nav  c:Connect  r:Refresh  ←→/1-0:Tabs  q:Quit"
+			help = "Enter:Detail  ↑↓:Nav  /:Search  f:Filter  x:Clear search  r:Refresh  " + nav
 		}
 	case tabEvents:
 		if m.eventsDetail {
-			help = "Esc:Back  ↑↓:Scroll"
+			help = "Esc:Back  ↑↓:Scroll  " + nav
 		} else {
-			help = "Enter:Detail  ↑↓:Nav  f:Filter  r:Refresh  ←→/1-0:Tabs  q:Quit"
+			help = "Enter:Detail  ↑↓:Nav  /:Search  f:Severity  x:Clear search  r:Refresh  " + nav
 		}
+	case tabNetMap:
+		help = "r:Refresh  Enter:Open Peers  " + nav
 	case tabProfiles:
 		if m.profilesEditing {
 			help = "Esc:Cancel  Tab:Next  ctrl+s:Add Profile"
 		} else {
-			help = "Enter:Switch  n:New  x:Remove  ↑↓:Nav  ←→/1-0:Tabs  q:Quit"
+			help = "Enter:Switch  n:New  x:Remove  ↑↓:Nav  " + nav
 		}
 	case tabDiagnostics:
 		switch m.diagMode {
@@ -1294,21 +1536,17 @@ func (m *Model) renderFooter() string {
 			if m.traceEditing {
 				help = "Esc:Cancel  Tab:Next  ctrl+s:Trace"
 			} else {
-				help = "t:Trace  s:States  ←/Esc:Back  ←→/1-0:Tabs  q:Quit"
+				help = "Enter/e:Edit  Esc:Back  " + nav
 			}
 		case diagModeStates:
-			help = "c:Clean  x:Delete  ↑↓:Nav  t:Trace  ←/Esc:Back  ←→/1-0:Tabs  q:Quit"
+			help = "c:Clean  x:Delete  ↑↓:Nav  Esc:Back  " + nav
 		default:
-			help = "t:Trace Packet  s:States  l/L:LogLevel±  b:Debug  B:Debug(anon)  ←→/1-0:Tabs  q:Quit"
+			help = "t:Trace  s:States  l/L:Log level  b/B:Debug bundle  " + nav
 		}
 	case tabServices:
-		if m.svcEditing {
-			help = "Esc:Cancel  Tab:Next  ctrl+s:Save"
-		} else {
-			help = "n:New Expose  ←→/1-0:Tabs  q:Quit"
-		}
+		help = "r:Refresh forwarding rules  " + nav
 	default:
-		help = "c:Connect  u:Up  d:Down  L:Logout  b:Debug  r:Refresh  ←→/1-0:Tabs  ↑↓:Nav  q:Quit"
+		help = "c:Connect  u:Up  d:Down  L:Logout  r:Refresh  " + nav
 	}
 	if m.lastAction != "" {
 		help = fmt.Sprintf("Last: %s  |  %s", m.lastAction, help)
@@ -1361,6 +1599,80 @@ func (m *Model) renderConfirm() string {
 		Render(msg)
 }
 
+func (m *Model) renderQuickSwitch() string {
+	var sb strings.Builder
+	sb.WriteString(styleWarning.Render("Quick switch") + styleNeutral.Render("  1-4 groups, 5-0 screens, Esc close") + "\n")
+	for _, g := range tabGroups {
+		label := fmt.Sprintf("[%s] %s", g.key, g.name)
+		if g.id == m.activeGroup() {
+			sb.WriteString(styleActiveTab.Render(label))
+		} else {
+			sb.WriteString(styleInactiveTab.Render(label))
+		}
+		sb.WriteString("  ")
+		for _, t := range g.tabs {
+			key := ""
+			for _, td := range tabs {
+				if td.id == t {
+					key = td.key
+					break
+				}
+			}
+			item := fmt.Sprintf("[%s] %s", key, tabName(t))
+			if t == m.activeTab {
+				sb.WriteString(styleActiveTab.Render(item))
+			} else {
+				sb.WriteString(styleNeutral.Render(item))
+			}
+			sb.WriteString("  ")
+		}
+		sb.WriteString("\n")
+	}
+	return lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(colorBlue).
+		Padding(0, 2).
+		Width(m.width - 2).
+		Render(sb.String())
+}
+
+func (m *Model) renderHelpOverlay() string {
+	lines := []string{
+		styleWarning.Render("Help: ") + styleValue.Render(tabName(m.activeTab)),
+		"Tab / Shift+Tab: switch Monitor, Network, Manage, Tools",
+		"Left / Right: switch screens inside the active group",
+		"1-4: jump to a group  •  g: quick switch  •  /: screen search",
+	}
+	if screen := m.screenHelp(); screen != "" {
+		lines = append(lines, screen)
+	}
+	lines = append(lines, "Press any key to close")
+	return lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(colorBlue).
+		Padding(0, 2).
+		Width(m.width - 2).
+		Render(strings.Join(lines, "\n"))
+}
+
+func (m *Model) screenHelp() string {
+	switch m.activeTab {
+	case tabPeers:
+		return "Peers: / search, f cycle all/online/offline/relayed, Enter detail, x clear search"
+	case tabEvents:
+		return "Events: / search, f severity filter, Enter detail, x clear search"
+	case tabRoutes:
+		return "Routes: Enter toggles selected route after confirmation from NetBird daemon"
+	case tabDiagnostics:
+		return "Diagnostics: t packet trace, s daemon states, b/B debug bundle, destructive state actions confirm"
+	case tabSettings:
+		return "Settings: setup-key login is editable; config summary is read-only"
+	case tabServices:
+		return "Services: forwarding rules are read-only in this release"
+	}
+	return ""
+}
+
 // ─── Peers key handler ───────────────────────────────────────────────────────
 
 func (m *Model) handlePeersKey(msg tea.KeyMsg) tea.Cmd {
@@ -1376,5 +1688,45 @@ func (m *Model) handlePeersKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	}
+
+	// Search mode
+	if m.peersSearching {
+		switch msg.String() {
+		case "esc":
+			m.peersSearching = false
+			m.peersSearch.SetValue("")
+			m.peersSearch.Blur()
+			m.rebuildPeersTableKeepingSelection()
+			return nil
+		case "enter":
+			m.peersSearching = false
+			m.peersSearch.Blur()
+			m.rebuildPeersTableKeepingSelection()
+			return nil
+		default:
+			var c tea.Cmd
+			m.peersSearch, c = m.peersSearch.Update(msg)
+			m.rebuildPeersTableKeepingSelection()
+			return c
+		}
+	}
+
+	switch msg.String() {
+	case "/":
+		m.peersSearching = true
+		m.peersSearch.Focus()
+		return nil
+	case "f":
+		m.peersFilter = nextPeerFilter(m.peersFilter)
+		m.rebuildPeersTableKeepingSelection()
+		return nil
+	case "x":
+		m.peersSearch.SetValue("")
+		m.peersSearching = false
+		m.peersSearch.Blur()
+		m.rebuildPeersTableKeepingSelection()
+		return nil
+	}
+
 	return m.handleGlobalKey(msg)
 }

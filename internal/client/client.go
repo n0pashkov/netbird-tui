@@ -205,6 +205,19 @@ func (c *Client) GetPeerSSHHostKey(ctx context.Context, peerAddress string) (str
 	return string(resp.SshHostKey), nil
 }
 
+// RequestJWTAuth initiates browser-based SSO login flow.
+func (c *Client) RequestJWTAuth(ctx context.Context) (*proto.RequestJWTAuthResponse, error) {
+	return c.daemon.RequestJWTAuth(ctx, &proto.RequestJWTAuthRequest{})
+}
+
+// WaitJWTToken waits for the SSO login to complete.
+func (c *Client) WaitJWTToken(ctx context.Context, deviceCode string) error {
+	_, err := c.daemon.WaitJWTToken(ctx, &proto.WaitJWTTokenRequest{
+		DeviceCode: deviceCode,
+	})
+	return err
+}
+
 // SetSyncResponsePersistence enables/disables sync response persistence (debug).
 func (c *Client) SetSyncResponsePersistence(ctx context.Context, enable bool) error {
 	_, err := c.daemon.SetSyncResponsePersistence(ctx, &proto.SetSyncResponsePersistenceRequest{

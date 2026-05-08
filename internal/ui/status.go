@@ -224,7 +224,7 @@ func renderStatus(m *Model) string {
 	}
 
 	if len(allEvents) > 0 {
-		sb.WriteString(styleSectionHeader.Render(fmt.Sprintf("Recent Events  (%d total, Tab 5 for full list)", len(allEvents))) + "\n")
+		sb.WriteString(styleSectionHeader.Render(fmt.Sprintf("Recent Events  (%d total, Events screen for full list)", len(allEvents))) + "\n")
 		start := len(allEvents) - 5
 		if start < 0 {
 			start = 0
@@ -273,12 +273,6 @@ func renderStatus(m *Model) string {
 			sb.WriteString(styleOnline.Render("Enabled"))
 		}
 		sb.WriteString("\n")
-	}
-
-	// ── Network map (compact) ────────────────────────────────────────────────
-	mapStr := renderNetworkMap(m, m.width-10)
-	if mapStr != "" {
-		sb.WriteString("\n" + mapStr)
 	}
 
 	return lipgloss.NewStyle().Padding(1, 2).Render(sb.String())

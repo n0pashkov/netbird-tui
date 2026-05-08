@@ -10,6 +10,48 @@ import (
 	"github.com/netbirdio/netbird/client/proto"
 )
 
+func filterPeers(peers []*proto.PeerState, query string, mode peerFilterMode) []*proto.PeerState {
+	q := strings.ToLower(query)
+	var out []*proto.PeerState
+	for _, p := range peers {
+		if mode == peerFilterOnline && p.ConnStatus != "Connected" {
+			continue
+		}
+		if mode == peerFilterOffline && p.ConnStatus == "Connected" {
+			continue
+		}
+		if mode == peerFilterRelayed && !p.Relayed {
+			continue
+		}
+		if q == "" || strings.Contains(strings.ToLower(p.Fqdn), q) ||
+			strings.Contains(strings.ToLower(p.IP), q) ||
+			strings.Contains(strings.ToLower(p.ConnStatus), q) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func peerFilterLabel(mode peerFilterMode) string {
+	switch mode {
+	case peerFilterOnline:
+		return "online"
+	case peerFilterOffline:
+		return "offline"
+	case peerFilterRelayed:
+		return "relayed"
+	default:
+		return "all"
+	}
+}
+
+func nextPeerFilter(mode peerFilterMode) peerFilterMode {
+	if mode == peerFilterRelayed {
+		return peerFilterAll
+	}
+	return mode + 1
+}
+
 func buildPeersTable(peers []*proto.PeerState, width, height int) table.Model {
 	// width - 2 (contentStyle) - 4 (Padding(0,2)) - 12 (6 cols × Padding(0,1) cell style)
 	available := width - 18

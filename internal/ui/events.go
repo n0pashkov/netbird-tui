@@ -9,7 +9,7 @@ import (
 	"github.com/netbirdio/netbird/client/proto"
 )
 
-func buildEventsTable(events []*proto.SystemEvent, filter proto.SystemEvent_Severity, width, height int) table.Model {
+func buildEventsTable(events []*proto.SystemEvent, filter proto.SystemEvent_Severity, query string, width, height int) table.Model {
 	available := width - 18
 	if available < 60 {
 		available = 60
@@ -35,11 +35,7 @@ func buildEventsTable(events []*proto.SystemEvent, filter proto.SystemEvent_Seve
 	}
 
 	rows := make([]table.Row, 0, len(events))
-	for _, ev := range events {
-		if filter >= 0 && ev.Severity != filter {
-			continue
-		}
-
+	for _, ev := range filterEvents(events, filter, query) {
 		ts := ""
 		if ev.Timestamp != nil {
 			ts = ev.Timestamp.AsTime().Local().Format("15:04:05")
@@ -82,6 +78,30 @@ func buildEventsTable(events []*proto.SystemEvent, filter proto.SystemEvent_Seve
 	return t
 }
 
+func filterEvents(events []*proto.SystemEvent, filter proto.SystemEvent_Severity, query string) []*proto.SystemEvent {
+	q := strings.ToLower(strings.TrimSpace(query))
+	out := make([]*proto.SystemEvent, 0, len(events))
+	for _, ev := range events {
+		if filter >= 0 && ev.Severity != filter {
+			continue
+		}
+		if q != "" {
+			haystack := strings.ToLower(strings.Join([]string{
+				ev.Id,
+				ev.UserMessage,
+				ev.Message,
+				severityLabel(ev.Severity),
+				categoryLabel(ev.Category),
+			}, " "))
+			if !strings.Contains(haystack, q) {
+				continue
+			}
+		}
+		out = append(out, ev)
+	}
+	return out
+}
+
 func renderEvents(m *Model) string {
 	// Detail view
 	if m.eventsDetail {
@@ -96,18 +116,20 @@ func renderEvents(m *Model) string {
 	filterLabel := "All"
 	if m.eventsFilter >= 0 {
 		filterLabel = severityLabel(m.eventsFilter)
-		shown = 0
-		for _, ev := range m.events {
-			if ev.Severity == m.eventsFilter {
-				shown++
-			}
-		}
 	}
+	shown = len(filterEvents(m.events, m.eventsFilter, m.eventsSearch.Value()))
 
 	summaryStyle := lipgloss.NewStyle().Bold(true).Foreground(colorBlue)
 	sb.WriteString(summaryStyle.Render("System Events") + "  ")
 	sb.WriteString(styleNeutral.Render(fmt.Sprintf("%d total  •  showing: %s (%d)", total, filterLabel, shown)))
-	sb.WriteString("  " + styleNeutral.Render("[f] to cycle filter") + "\n\n")
+	if m.eventsSearch.Value() != "" {
+		sb.WriteString(styleNeutral.Render(fmt.Sprintf("  •  search: %q", m.eventsSearch.Value())))
+	}
+	sb.WriteString("\n")
+	if m.eventsSearching {
+		sb.WriteString(styleNeutral.Render("Search: ") + m.eventsSearch.View() + styleNeutral.Render("  Enter:apply  Esc:clear") + "\n")
+	}
+	sb.WriteString("\n")
 
 	if len(m.events) == 0 {
 		sb.WriteString(styleNeutral.Render("No events recorded"))
@@ -125,24 +147,12 @@ func renderEventDetail(m *Model) string {
 		return styleNeutral.Padding(1, 2).Render("No event selected")
 	}
 
-	// Find the matching event
 	idx := m.eventsTable.Cursor()
-	filteredIdx := 0
-	var ev *proto.SystemEvent
-	for _, e := range m.events {
-		if m.eventsFilter >= 0 && e.Severity != m.eventsFilter {
-			continue
-		}
-		if filteredIdx == idx {
-			ev = e
-			break
-		}
-		filteredIdx++
-	}
-
-	if ev == nil {
+	filtered := filterEvents(m.events, m.eventsFilter, m.eventsSearch.Value())
+	if idx < 0 || idx >= len(filtered) {
 		return styleNeutral.Padding(1, 2).Render("Event not found")
 	}
+	ev := filtered[idx]
 
 	var sb strings.Builder
 
