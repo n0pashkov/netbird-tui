@@ -10,7 +10,7 @@
 - Added packet tracer input validation before daemon calls.
 - Added unit coverage for navigation, filtering, helpers, trace validation, footer actions, and confirmation behavior.
 - Added baseline CI for tests, vet, and build.
-- Updated README for the current 10-screen layout, socket usage, troubleshooting, and installation paths.
+- Updated README for the current 11-screen layout, socket usage, troubleshooting, and installation paths.
 
 ## v1.0.0
 
