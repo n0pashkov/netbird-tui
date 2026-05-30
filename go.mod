@@ -1,4 +1,4 @@
-module netbird-tui
+module github.com/n0pashkov/netbird-tui
 
 go 1.25
 

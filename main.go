@@ -5,8 +5,8 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"netbird-tui/internal/client"
-	"netbird-tui/internal/ui"
+	"github.com/n0pashkov/netbird-tui/internal/client"
+	"github.com/n0pashkov/netbird-tui/internal/ui"
 )
 
 func main() {

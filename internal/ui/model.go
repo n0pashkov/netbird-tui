@@ -14,8 +14,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/n0pashkov/netbird-tui/internal/client"
 	"github.com/netbirdio/netbird/client/proto"
-	"netbird-tui/internal/client"
 )
 
 type tab int
