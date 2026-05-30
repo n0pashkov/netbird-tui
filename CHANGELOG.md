@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.1.1
+
+- Fixed the Go module path so `go install github.com/n0pashkov/netbird-tui@latest` works correctly.
+
 ## v1.1.0
 
 - Reworked navigation around Monitor, Network, Manage, and Tools groups.
