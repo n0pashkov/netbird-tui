@@ -2,11 +2,17 @@ package client
 
 import (
 	"context"
+	"os/exec"
+	"strings"
 
 	"github.com/netbirdio/netbird/client/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
+
+var runNetbirdProfileList = func() ([]byte, error) {
+	return exec.Command("netbird", "profile", "list").Output()
+}
 
 type Client struct {
 	conn   *grpc.ClientConn
@@ -150,6 +156,14 @@ func (c *Client) GetEvents(ctx context.Context) ([]*proto.SystemEvent, error) {
 // ListProfiles returns all configured profiles.
 func (c *Client) ListProfiles(ctx context.Context) ([]*proto.Profile, error) {
 	resp, err := c.daemon.ListProfiles(ctx, &proto.ListProfilesRequest{})
+	if err == nil && len(resp.Profiles) > 0 {
+		return resp.Profiles, nil
+	}
+
+	profiles, cliErr := listProfilesWithCLI()
+	if cliErr == nil && len(profiles) > 0 {
+		return profiles, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -229,5 +243,75 @@ func (c *Client) SetSyncResponsePersistence(ctx context.Context, enable bool) er
 func (c *Client) Close() {
 	if c.conn != nil {
 		c.conn.Close()
+	}
+}
+
+func listProfilesWithCLI() ([]*proto.Profile, error) {
+	out, err := runNetbirdProfileList()
+	if err != nil {
+		return nil, err
+	}
+	return parseProfileListOutput(string(out)), nil
+}
+
+func parseProfileListOutput(output string) []*proto.Profile {
+	lines := strings.Split(output, "\n")
+	profiles := make([]*proto.Profile, 0, len(lines))
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "Found ") {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if len(fields) >= 2 && strings.EqualFold(fields[0], "NAME") && strings.EqualFold(fields[1], "ACTIVE") {
+			continue
+		}
+
+		name := fields[0]
+		active := false
+
+		// NetBird >= 0.73 prints a table:
+		// NAME     ACTIVE
+		// default  ✓
+		if len(fields) >= 2 {
+			active = isActiveProfileMarker(fields[len(fields)-1])
+		}
+
+		// Older NetBird versions printed markers before names:
+		// ✓ default
+		// ✕ other
+		if isProfileMarker(name) && len(fields) >= 2 {
+			active = isActiveProfileMarker(name)
+			name = fields[1]
+		}
+
+		if name != "" {
+			profiles = append(profiles, &proto.Profile{Name: name, IsActive: active})
+		}
+	}
+
+	return profiles
+}
+
+func isProfileMarker(value string) bool {
+	switch value {
+	case "✓", "✔", "✕", "✗", "x", "X", "*":
+		return true
+	default:
+		return false
+	}
+}
+
+func isActiveProfileMarker(value string) bool {
+	switch value {
+	case "✓", "✔", "*":
+		return true
+	default:
+		return false
 	}
 }
