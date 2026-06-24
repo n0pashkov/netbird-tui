@@ -24,6 +24,30 @@ func renderStatus(m *Model) string {
 
 	var sb strings.Builder
 
+	// ── Version section ──────────────────────────────────────────────────────
+	sb.WriteString(styleSectionHeader.Render("Version") + "\n")
+	if m.status.DaemonVersion != "" {
+		sb.WriteString(styleLabel.Render("Daemon:"))
+		sb.WriteString(styleValue.Render(m.status.DaemonVersion))
+		sb.WriteString("\n")
+	}
+	if m.versionInfo.CLIVersion != "" {
+		sb.WriteString(styleLabel.Render("CLI:"))
+		sb.WriteString(styleValue.Render(m.versionInfo.CLIVersion))
+		if m.versionInfo.UpdateAvailable && m.versionInfo.LatestVersion != "" {
+			sb.WriteString(styleWarning.Render("  update available: " + m.versionInfo.LatestVersion))
+		} else if m.versionInfo.LatestVersion != "" {
+			sb.WriteString(styleOnline.Render("  up to date"))
+		}
+		sb.WriteString("\n")
+	}
+	if m.versionInfo.CheckError != "" {
+		sb.WriteString(styleLabel.Render("Update check:"))
+		sb.WriteString(styleNeutral.Render("Unavailable"))
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\n")
+
 	// ── Connection section ───────────────────────────────────────────────────
 	sb.WriteString(styleSectionHeader.Render("Connection") + "\n")
 

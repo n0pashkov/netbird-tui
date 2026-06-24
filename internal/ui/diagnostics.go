@@ -57,6 +57,8 @@ func renderDiagnostics(m *Model) string {
 		return renderTracePacket(m)
 	case diagModeStates:
 		return renderStates(m)
+	case diagModeOutput:
+		return renderDebugOutput(m)
 	}
 	return renderDiagnosticsOverview(m)
 }
@@ -98,7 +100,12 @@ func renderDiagnosticsOverview(m *Model) string {
 
 	// Debug Bundle section
 	sb.WriteString(styleSectionHeader.Render("Debug Bundle") + "\n")
-	sb.WriteString(styleNeutral.Render("  b:create bundle  B:create anonymized bundle") + "\n\n")
+	sb.WriteString(styleNeutral.Render("  b:create bundle  B:create anonymized bundle  f:debug for 1m") + "\n\n")
+
+	// Debug CLI section
+	sb.WriteString(styleSectionHeader.Render("Debug Commands") + "\n")
+	sb.WriteString(styleNeutral.Render("  c:dump config  a:capture packets for 10s") + "\n")
+	sb.WriteString(styleNeutral.Render("  p:persistence on  P:persistence off") + "\n\n")
 
 	// Connection test info
 	sb.WriteString(styleSectionHeader.Render("Connection Info") + "\n")
@@ -152,6 +159,28 @@ func renderDiagnosticsOverview(m *Model) string {
 			}
 			sb.WriteString("  " + lbl.Render("Relays:") + val.Render(fmt.Sprintf("%d/%d available", avail, len(fs.Relays))) + "\n")
 		}
+	}
+
+	return lipgloss.NewStyle().Padding(1, 2).Render(sb.String())
+}
+
+func renderDebugOutput(m *Model) string {
+	var sb strings.Builder
+
+	title := m.debugTitle
+	if title == "" {
+		title = "Debug Output"
+	}
+	sb.WriteString(styleSectionHeader.Render(title) + "\n")
+	sb.WriteString(styleNeutral.Render("Esc:back to Diagnostics") + "\n\n")
+
+	if m.debugErr != "" {
+		sb.WriteString(styleError.Render("Error: "+m.debugErr) + "\n\n")
+	}
+	if strings.TrimSpace(m.debugOutput) == "" {
+		sb.WriteString(styleNeutral.Render("No output"))
+	} else {
+		sb.WriteString(styleValue.Render(fitContentWidth(m.debugOutput, m.width-8)))
 	}
 
 	return lipgloss.NewStyle().Padding(1, 2).Render(sb.String())

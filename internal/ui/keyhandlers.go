@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"time"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/netbirdio/netbird/client/proto"
 )
@@ -150,6 +152,8 @@ func (m *Model) handleDiagnosticsKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handleTraceKey(msg)
 	case diagModeStates:
 		return m.handleStatesKey(msg)
+	case diagModeOutput:
+		return m.handleDebugOutputKey(msg)
 	}
 
 	// Overview mode
@@ -160,6 +164,25 @@ func (m *Model) handleDiagnosticsKey(msg tea.KeyMsg) tea.Cmd {
 	case "s":
 		m.diagMode = diagModeStates
 		return tea.Batch(m.fetchStates())
+	case "c":
+		m.loading = true
+		m.loadingWhat = "Dumping config"
+		return m.doDebugCommand("Debug Config", 10*time.Second, "config")
+	case "a":
+		m.loading = true
+		m.loadingWhat = "Capturing packets"
+		return m.doDebugCommand("Packet Capture", 15*time.Second, "capture", "--duration", "10s")
+	case "f":
+		m.confirm = "debug-for"
+		return nil
+	case "p":
+		m.loading = true
+		m.loadingWhat = "Setting persistence"
+		return m.doSetSyncPersistence(true)
+	case "P":
+		m.loading = true
+		m.loadingWhat = "Setting persistence"
+		return m.doSetSyncPersistence(false)
 	case "l":
 		// Increase log level
 		if m.logLevelKnown {
@@ -182,6 +205,18 @@ func (m *Model) handleDiagnosticsKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	case "r":
 		return tea.Batch(m.fetchStates(), m.fetchLogLevel())
+	default:
+		return m.handleGlobalKey(msg)
+	}
+	return nil
+}
+
+func (m *Model) handleDebugOutputKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "esc", "enter":
+		m.diagMode = diagModeOverview
+	case "q":
+		return tea.Quit
 	default:
 		return m.handleGlobalKey(msg)
 	}

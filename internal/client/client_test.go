@@ -29,3 +29,25 @@ func TestParseProfileListOutputLegacyFormat(t *testing.T) {
 		t.Fatalf("second profile = %#v, want active shaban", profiles[1])
 	}
 }
+
+func TestCompareVersions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		a    string
+		b    string
+		want int
+	}{
+		{name: "same", a: "0.73.2", b: "v0.73.2", want: 0},
+		{name: "newer latest", a: "0.72.3", b: "0.73.2", want: -1},
+		{name: "current newer", a: "0.74.0", b: "0.73.2", want: 1},
+		{name: "numeric not lexical", a: "0.9.0", b: "0.10.0", want: -1},
+		{name: "suffix", a: "0.73.2-dev", b: "0.73.2", want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := compareVersions(tc.a, tc.b)
+			if got != tc.want {
+				t.Fatalf("compareVersions(%q, %q) = %d, want %d", tc.a, tc.b, got, tc.want)
+			}
+		})
+	}
+}

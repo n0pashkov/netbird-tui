@@ -187,6 +187,19 @@ func TestTraceInputValidation(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsOverviewShowsDebugCommands(t *testing.T) {
+	m := New(nil)
+	m.width = 120
+	m.height = 30
+
+	view := renderDiagnosticsOverview(m)
+	for _, want := range []string{"Debug Commands", "c:dump config", "a:capture packets for 10s", "p:persistence on", "f:debug for 1m"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("diagnostics overview missing %q in %q", want, view)
+		}
+	}
+}
+
 func TestFooterHidesUnavailableActionsAndConfirmIntercepts(t *testing.T) {
 	m := New(nil)
 	m.width = 120

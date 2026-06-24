@@ -109,6 +109,11 @@ type debugBundleMsg struct {
 	path string
 	err  error
 }
+type debugCommandMsg struct {
+	title  string
+	output string
+	err    error
+}
 type loginMsg struct{ err error }
 type toggleRouteMsg struct{ err error }
 type configMsg struct {
@@ -148,6 +153,9 @@ type featuresMsg struct {
 	features *proto.GetFeaturesResponse
 	err      error
 }
+type versionMsg struct {
+	info client.VersionInfo
+}
 type sshHostKeyMsg struct {
 	key string
 	err error
@@ -162,6 +170,7 @@ const (
 	diagModeOverview diagMode = iota
 	diagModeTrace
 	diagModeStates
+	diagModeOutput
 )
 
 // ─── Model ────────────────────────────────────────────────────────────────────
@@ -187,8 +196,9 @@ type Model struct {
 	helpOverlay bool
 
 	// ── Status tab ──
-	status   *proto.StatusResponse
-	features *proto.GetFeaturesResponse
+	status      *proto.StatusResponse
+	features    *proto.GetFeaturesResponse
+	versionInfo client.VersionInfo
 
 	// ── Peers tab ──
 	peersTable     table.Model
@@ -244,6 +254,9 @@ type Model struct {
 	traceResult  *proto.TracePacketResponse
 	traceErr     string
 	traceEditing bool
+	debugTitle   string
+	debugOutput  string
+	debugErr     string
 
 	// ── Services tab ──
 	fwdRules []*proto.ForwardingRule
@@ -350,6 +363,7 @@ func (m *Model) Init() tea.Cmd {
 		m.fetchLogLevel(),
 		m.fetchStates(),
 		m.fetchFeatures(),
+		m.fetchVersionInfo(),
 		tickCmd(),
 	)
 }
@@ -449,6 +463,14 @@ func (m *Model) fetchFeatures() tea.Cmd {
 	}
 }
 
+func (m *Model) fetchVersionInfo() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return versionMsg{info: client.NetBirdVersionInfo(ctx)}
+	}
+}
+
 // ─── Action commands ──────────────────────────────────────────────────────────
 
 func (m *Model) doUp() tea.Cmd {
@@ -481,6 +503,15 @@ func (m *Model) doDebugBundle(anonymize, sysInfo bool) tea.Cmd {
 		defer cancel()
 		path, err := m.client.DebugBundle(ctx, anonymize, sysInfo)
 		return debugBundleMsg{path: path, err: err}
+	}
+}
+
+func (m *Model) doDebugCommand(title string, timeout time.Duration, args ...string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		output, err := client.RunDebugCommand(ctx, args...)
+		return debugCommandMsg{title: title, output: output, err: err}
 	}
 }
 
@@ -551,6 +582,14 @@ func (m *Model) doSetLogLevel(level proto.LogLevel) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return setLogLevelMsg{err: m.client.SetLogLevel(ctx, level)}
+	}
+}
+
+func (m *Model) doSetSyncPersistence(enable bool) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return syncPersistenceMsg{err: m.client.SetSyncResponsePersistence(ctx, enable)}
 	}
 }
 
@@ -818,6 +857,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.features = msg.features
 		}
 
+	case versionMsg:
+		m.versionInfo = msg.info
+
 	case upDownMsg:
 		m.loading = false
 		if msg.err != nil {
@@ -843,6 +885,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.lastAction = "Debug bundle: " + msg.path
 		}
+
+	case debugCommandMsg:
+		m.loading = false
+		m.debugTitle = msg.title
+		m.debugOutput = msg.output
+		m.debugErr = ""
+		if msg.err != nil {
+			m.debugErr = msg.err.Error()
+		}
+		m.diagMode = diagModeOutput
 
 	case loginMsg:
 		m.loading = false
@@ -898,6 +950,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.lastAction = "Log level updated"
 			cmds = append(cmds, m.fetchLogLevel())
+		}
+
+	case syncPersistenceMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.lastAction = "Error setting persistence: " + msg.err.Error()
+		} else {
+			m.lastAction = "Sync persistence updated"
 		}
 
 	case cleanStateMsg:
@@ -994,6 +1054,9 @@ func (m *Model) handleConfirm(msg tea.KeyMsg) tea.Cmd {
 			return m.doDebugBundle(false, true)
 		case "debug-anon":
 			return m.doDebugBundle(true, true)
+		case "debug-for":
+			m.loadingWhat = "Running debug"
+			return m.doDebugCommand("Debug For 1m", 75*time.Second, "for", "1m")
 		case "clean-state":
 			if m.statesFocused < len(m.states) {
 				return m.doCleanState(m.states[m.statesFocused].Name)
@@ -1143,7 +1206,7 @@ func (m *Model) handleGlobalKey(msg tea.KeyMsg) tea.Cmd {
 	case "r":
 		m.loading = true
 		m.err = nil
-		cmds = append(cmds, m.fetchStatus(), m.fetchNetworks(), m.fetchFwdRules(), m.fetchEvents(), m.fetchProfiles(), m.fetchStates())
+		cmds = append(cmds, m.fetchStatus(), m.fetchNetworks(), m.fetchFwdRules(), m.fetchEvents(), m.fetchProfiles(), m.fetchStates(), m.fetchVersionInfo())
 	case "c":
 		if m.isConnected() {
 			m.confirm = "down"
@@ -1345,6 +1408,7 @@ func fitContentWidth(content string, width int) string {
 
 func (m *Model) renderHeader() string {
 	title := styleTitle.Render("NetBird TUI")
+	version := m.headerVersionLabel()
 
 	status := ""
 	if m.loading {
@@ -1375,10 +1439,25 @@ func (m *Model) renderHeader() string {
 
 	headerContent := lipgloss.JoinHorizontal(lipgloss.Center,
 		title,
+		version,
 		styleNeutral.Render("  │  "),
 		status,
 	)
 	return styleHeader.Width(m.width - 2).Render(headerContent)
+}
+
+func (m *Model) headerVersionLabel() string {
+	version := m.versionInfo.CLIVersion
+	if version == "" && m.status != nil {
+		version = m.status.DaemonVersion
+	}
+	if version == "" {
+		return ""
+	}
+	if m.versionInfo.UpdateAvailable && m.versionInfo.LatestVersion != "" {
+		return styleWarning.Render(" " + version + "→" + m.versionInfo.LatestVersion)
+	}
+	return styleNeutral.Render(" " + version)
 }
 
 func (m *Model) renderTabBar() string {
@@ -1540,8 +1619,10 @@ func (m *Model) renderFooter() string {
 			}
 		case diagModeStates:
 			help = "c:Clean  x:Delete  ↑↓:Nav  Esc:Back  " + nav
+		case diagModeOutput:
+			help = "Esc/Enter:Back  " + nav
 		default:
-			help = "t:Trace  s:States  l/L:Log level  b/B:Debug bundle  " + nav
+			help = "t:Trace  s:States  c:Config  a:Capture  f:Debug for 1m  " + nav
 		}
 	case tabServices:
 		help = "r:Refresh forwarding rules  " + nav
@@ -1568,6 +1649,8 @@ func (m *Model) renderConfirm() string {
 		actionStr = "create debug bundle"
 	case "debug-anon":
 		actionStr = "create anonymized debug bundle"
+	case "debug-for":
+		actionStr = "run trace logging for 1m and create debug bundle"
 	case "clean-state":
 		if m.statesFocused < len(m.states) {
 			actionStr = "clean state: " + m.states[m.statesFocused].Name
