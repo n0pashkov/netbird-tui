@@ -109,15 +109,16 @@ func renderEvents(m *Model) string {
 	}
 
 	var sb strings.Builder
+	events := m.eventsForDisplay()
 
 	// Header
-	total := len(m.events)
+	total := len(events)
 	shown := total
 	filterLabel := "All"
 	if m.eventsFilter >= 0 {
 		filterLabel = severityLabel(m.eventsFilter)
 	}
-	shown = len(filterEvents(m.events, m.eventsFilter, m.eventsSearch.Value()))
+	shown = len(filterEvents(events, m.eventsFilter, m.eventsSearch.Value()))
 
 	summaryStyle := lipgloss.NewStyle().Bold(true).Foreground(colorBlue)
 	sb.WriteString(summaryStyle.Render("System Events") + "  ")
@@ -131,7 +132,7 @@ func renderEvents(m *Model) string {
 	}
 	sb.WriteString("\n")
 
-	if len(m.events) == 0 {
+	if len(events) == 0 {
 		sb.WriteString(styleNeutral.Render("No events recorded"))
 		return lipgloss.NewStyle().Padding(1, 2).Render(sb.String())
 	}
@@ -148,7 +149,7 @@ func renderEventDetail(m *Model) string {
 	}
 
 	idx := m.eventsTable.Cursor()
-	filtered := filterEvents(m.events, m.eventsFilter, m.eventsSearch.Value())
+	filtered := filterEvents(m.eventsForDisplay(), m.eventsFilter, m.eventsSearch.Value())
 	if idx < 0 || idx >= len(filtered) {
 		return styleNeutral.Padding(1, 2).Render("Event not found")
 	}

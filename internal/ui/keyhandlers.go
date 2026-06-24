@@ -167,7 +167,7 @@ func (m *Model) handleDiagnosticsKey(msg tea.KeyMsg) tea.Cmd {
 	case "c":
 		m.loading = true
 		m.loadingWhat = "Dumping config"
-		return m.doDebugCommand("Debug Config", 10*time.Second, "config")
+		return m.doDebugConfigDump()
 	case "a":
 		m.loading = true
 		m.loadingWhat = "Capturing packets"
@@ -354,17 +354,17 @@ func (m *Model) handleEventsKey(msg tea.KeyMsg) tea.Cmd {
 			m.eventsSearching = false
 			m.eventsSearch.SetValue("")
 			m.eventsSearch.Blur()
-			m.eventsTable = buildEventsTable(m.events, m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
+			m.eventsTable = buildEventsTable(m.eventsForDisplay(), m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
 			return nil
 		case "enter":
 			m.eventsSearching = false
 			m.eventsSearch.Blur()
-			m.eventsTable = buildEventsTable(m.events, m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
+			m.eventsTable = buildEventsTable(m.eventsForDisplay(), m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
 			return nil
 		default:
 			var c tea.Cmd
 			m.eventsSearch, c = m.eventsSearch.Update(msg)
-			m.eventsTable = buildEventsTable(m.events, m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
+			m.eventsTable = buildEventsTable(m.eventsForDisplay(), m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
 			return c
 		}
 	}
@@ -408,7 +408,7 @@ func (m *Model) handleEventsKey(msg tea.KeyMsg) tea.Cmd {
 		default:
 			m.eventsFilter = -1
 		}
-		m.eventsTable = buildEventsTable(m.events, m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
+		m.eventsTable = buildEventsTable(m.eventsForDisplay(), m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
 		return nil
 	case "r":
 		return m.fetchEvents()
@@ -420,7 +420,7 @@ func (m *Model) handleEventsKey(msg tea.KeyMsg) tea.Cmd {
 		m.eventsSearch.SetValue("")
 		m.eventsSearching = false
 		m.eventsSearch.Blur()
-		m.eventsTable = buildEventsTable(m.events, m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
+		m.eventsTable = buildEventsTable(m.eventsForDisplay(), m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
 		return nil
 	default:
 		return m.handleGlobalKey(msg)
@@ -430,12 +430,95 @@ func (m *Model) handleEventsKey(msg tea.KeyMsg) tea.Cmd {
 
 // handleServicesKey handles keyboard input for the Services tab.
 func (m *Model) handleServicesKey(msg tea.KeyMsg) tea.Cmd {
+	if m.exposeEditing {
+		switch msg.String() {
+		case "esc":
+			m.exposeEditing = false
+			m.clearExposeInputs()
+			return nil
+		case "ctrl+s":
+			m.loading = true
+			m.loadingWhat = "Starting expose"
+			m.exposeMsg = ""
+			return m.doExposeService()
+		case "tab":
+			m.exposeFocused = (m.exposeFocused + 1) % 8
+			m.focusExposeField()
+			return nil
+		default:
+			return m.updateExposeInput(msg)
+		}
+	}
+
 	switch msg.String() {
+	case "n":
+		m.exposeEditing = true
+		m.exposeFocused = 0
+		m.focusExposeField()
+	case "x":
+		m.stopExposeService()
 	case "r":
 		return m.fetchFwdRules()
 	default:
 		return m.handleGlobalKey(msg)
 	}
+	return nil
+}
+
+func (m *Model) clearExposeInputs() {
+	m.exposePortInput.Blur()
+	m.exposeProtocolInput.Blur()
+	m.exposeExternalInput.Blur()
+	m.exposeDomainInput.Blur()
+	m.exposeNameInput.Blur()
+	m.exposePasswordInput.Blur()
+	m.exposePinInput.Blur()
+	m.exposeGroupsInput.Blur()
+}
+
+func (m *Model) focusExposeField() {
+	m.clearExposeInputs()
+	switch m.exposeFocused {
+	case 0:
+		m.exposePortInput.Focus()
+	case 1:
+		m.exposeProtocolInput.Focus()
+	case 2:
+		m.exposeExternalInput.Focus()
+	case 3:
+		m.exposeDomainInput.Focus()
+	case 4:
+		m.exposeNameInput.Focus()
+	case 5:
+		m.exposePasswordInput.Focus()
+	case 6:
+		m.exposePinInput.Focus()
+	case 7:
+		m.exposeGroupsInput.Focus()
+	}
+}
+
+func (m *Model) updateExposeInput(msg tea.KeyMsg) tea.Cmd {
+	var c tea.Cmd
+	switch m.exposeFocused {
+	case 0:
+		m.exposePortInput, c = m.exposePortInput.Update(msg)
+	case 1:
+		m.exposeProtocolInput, c = m.exposeProtocolInput.Update(msg)
+	case 2:
+		m.exposeExternalInput, c = m.exposeExternalInput.Update(msg)
+	case 3:
+		m.exposeDomainInput, c = m.exposeDomainInput.Update(msg)
+	case 4:
+		m.exposeNameInput, c = m.exposeNameInput.Update(msg)
+	case 5:
+		m.exposePasswordInput, c = m.exposePasswordInput.Update(msg)
+	case 6:
+		m.exposePinInput, c = m.exposePinInput.Update(msg)
+	case 7:
+		m.exposeGroupsInput, c = m.exposeGroupsInput.Update(msg)
+	}
+	return c
 }
 
 // nextLogLevel cycles log levels up or down.

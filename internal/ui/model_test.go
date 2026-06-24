@@ -200,13 +200,44 @@ func TestDiagnosticsOverviewShowsDebugCommands(t *testing.T) {
 	}
 }
 
-func TestFooterHidesUnavailableActionsAndConfirmIntercepts(t *testing.T) {
+func TestEventsScreenFallsBackToStatusEvents(t *testing.T) {
+	m := New(nil)
+	m.width = 120
+	m.height = 30
+	m.status = &proto.StatusResponse{FullStatus: &proto.FullStatus{
+		Events: []*proto.SystemEvent{{UserMessage: "status event"}},
+	}}
+	m.events = nil
+	m.eventsTable = buildEventsTable(m.eventsForDisplay(), m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
+
+	view := renderEvents(m)
+	if !strings.Contains(view, "1 total") || !strings.Contains(view, "status event") {
+		t.Fatalf("events screen should render status events fallback, got %q", view)
+	}
+}
+
+func TestStatusMsgRebuildsEventsFallbackTable(t *testing.T) {
+	m := New(nil)
+	m.width = 120
+	m.height = 30
+
+	_, _ = m.Update(statusMsg{status: &proto.StatusResponse{FullStatus: &proto.FullStatus{
+		Events: []*proto.SystemEvent{{UserMessage: "status event"}},
+	}}})
+
+	view := renderEvents(m)
+	if !strings.Contains(view, "status event") {
+		t.Fatalf("status update should rebuild fallback events table, got %q", view)
+	}
+}
+
+func TestFooterShowsExposeActionsAndConfirmIntercepts(t *testing.T) {
 	m := New(nil)
 	m.width = 120
 	m.height = 30
 	m.setActiveTab(tabServices)
-	if footer := m.renderFooter(); strings.Contains(footer, "Expose") || strings.Contains(footer, "New") {
-		t.Fatalf("services footer advertises unavailable action: %q", footer)
+	if footer := m.renderFooter(); !strings.Contains(footer, "New expose") || !strings.Contains(footer, "Stop expose") {
+		t.Fatalf("services footer missing expose actions: %q", footer)
 	}
 	m.setActiveTab(tabSettings)
 	m.settingsEditing = true
@@ -217,6 +248,31 @@ func TestFooterHidesUnavailableActionsAndConfirmIntercepts(t *testing.T) {
 	m.handleTabKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
 	if m.quickSwitch {
 		t.Fatalf("confirmation should intercept global keys")
+	}
+}
+
+func TestBuildExposeRequestValidation(t *testing.T) {
+	m := New(nil)
+	m.exposePortInput.SetValue("8080")
+	m.exposeProtocolInput.SetValue("tcp")
+	m.exposeExternalInput.SetValue("4433")
+	req, protocol, err := m.buildExposeRequest()
+	if err != nil {
+		t.Fatalf("valid expose request rejected: %v", err)
+	}
+	if protocol != "tcp" || req.Port != 8080 || req.ListenPort != 4433 || req.Protocol != proto.ExposeProtocol_EXPOSE_TCP {
+		t.Fatalf("request mismatch: protocol=%s req=%#v", protocol, req)
+	}
+
+	m.exposeProtocolInput.SetValue("http")
+	if _, _, err := m.buildExposeRequest(); err == nil {
+		t.Fatalf("external port should be rejected for http")
+	}
+
+	m.exposeExternalInput.SetValue("")
+	m.exposePinInput.SetValue("12345x")
+	if _, _, err := m.buildExposeRequest(); err == nil {
+		t.Fatalf("non-numeric pin should be rejected")
 	}
 }
 

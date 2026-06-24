@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/n0pashkov/netbird-tui/internal/client"
 	"github.com/netbirdio/netbird/client/proto"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 type tab int
@@ -102,6 +103,11 @@ type networksMsg struct {
 type fwdRulesMsg struct {
 	rules []*proto.ForwardingRule
 	err   error
+}
+type exposeServiceMsg struct {
+	session *exposeSession
+	ready   *proto.ExposeServiceReady
+	err     error
 }
 type upDownMsg struct{ err error }
 type logoutMsg struct{ err error }
@@ -259,8 +265,20 @@ type Model struct {
 	debugErr     string
 
 	// ── Services tab ──
-	fwdRules []*proto.ForwardingRule
-	fwdTable table.Model
+	fwdRules            []*proto.ForwardingRule
+	fwdTable            table.Model
+	exposeEditing       bool
+	exposeFocused       int
+	exposePortInput     textinput.Model
+	exposeProtocolInput textinput.Model
+	exposeExternalInput textinput.Model
+	exposeDomainInput   textinput.Model
+	exposeNameInput     textinput.Model
+	exposePasswordInput textinput.Model
+	exposePinInput      textinput.Model
+	exposeGroupsInput   textinput.Model
+	exposeMsg           string
+	exposeSession       *exposeSession
 
 	// ── Settings tab ──
 	config          *proto.GetConfigResponse
@@ -271,6 +289,15 @@ type Model struct {
 	settingsMsg     string
 	// Extended settings
 	settingsPage int // 0=login, 1=config flags
+}
+
+type exposeSession struct {
+	cancel     context.CancelFunc
+	port       uint32
+	protocol   string
+	serviceURL string
+	domain     string
+	name       string
 }
 
 func New(c *client.Client) *Model {
@@ -330,24 +357,67 @@ func New(c *client.Client) *Model {
 	tDir.Placeholder = "in"
 	tDir.CharLimit = 10
 
+	// Expose service inputs
+	ePort := textinput.New()
+	ePort.Placeholder = ""
+	ePort.CharLimit = 5
+
+	eProto := textinput.New()
+	eProto.SetValue("http")
+	eProto.CharLimit = 5
+
+	eExternal := textinput.New()
+	eExternal.Placeholder = ""
+	eExternal.CharLimit = 5
+
+	eDomain := textinput.New()
+	eDomain.Placeholder = ""
+	eDomain.CharLimit = 128
+
+	eName := textinput.New()
+	eName.Placeholder = ""
+	eName.CharLimit = 64
+
+	ePassword := textinput.New()
+	ePassword.Placeholder = ""
+	ePassword.EchoMode = textinput.EchoPassword
+	ePassword.CharLimit = 128
+
+	ePin := textinput.New()
+	ePin.Placeholder = ""
+	ePin.EchoMode = textinput.EchoPassword
+	ePin.CharLimit = 6
+
+	eGroups := textinput.New()
+	eGroups.Placeholder = ""
+	eGroups.CharLimit = 128
+
 	return &Model{
-		client:           c,
-		spinner:          sp,
-		loading:          true,
-		loadingWhat:      "Connecting",
-		setupKeyInput:    ski,
-		mgmtURLInput:     mui,
-		profileNameInput: pni,
-		profileMgmtInput: pmi,
-		traceSrcIP:       tSrc,
-		traceDstIP:       tDst,
-		traceProto:       tProto,
-		traceSrcPort:     tSPort,
-		traceDstPort:     tDPort,
-		traceDir:         tDir,
-		eventsFilter:     -1,
-		eventsSearch:     es,
-		peersSearch:      ps,
+		client:              c,
+		spinner:             sp,
+		loading:             true,
+		loadingWhat:         "Connecting",
+		setupKeyInput:       ski,
+		mgmtURLInput:        mui,
+		profileNameInput:    pni,
+		profileMgmtInput:    pmi,
+		traceSrcIP:          tSrc,
+		traceDstIP:          tDst,
+		traceProto:          tProto,
+		traceSrcPort:        tSPort,
+		traceDstPort:        tDPort,
+		traceDir:            tDir,
+		exposePortInput:     ePort,
+		exposeProtocolInput: eProto,
+		exposeExternalInput: eExternal,
+		exposeDomainInput:   eDomain,
+		exposeNameInput:     eName,
+		exposePasswordInput: ePassword,
+		exposePinInput:      ePin,
+		exposeGroupsInput:   eGroups,
+		eventsFilter:        -1,
+		eventsSearch:        es,
+		peersSearch:         ps,
 	}
 }
 
@@ -515,6 +585,22 @@ func (m *Model) doDebugCommand(title string, timeout time.Duration, args ...stri
 	}
 }
 
+func (m *Model) doDebugConfigDump() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cfg, err := m.client.GetConfig(ctx)
+		if err != nil {
+			return debugCommandMsg{title: "Debug Config", err: err}
+		}
+		out, err := protojson.MarshalOptions{Multiline: true, Indent: "  "}.Marshal(cfg)
+		if err != nil {
+			return debugCommandMsg{title: "Debug Config", err: err}
+		}
+		return debugCommandMsg{title: "Debug Config", output: string(out)}
+	}
+}
+
 func (m *Model) doLogin() tea.Cmd {
 	setupKey := m.setupKeyInput.Value()
 	mgmtURL := m.mgmtURLInput.Value()
@@ -591,6 +677,164 @@ func (m *Model) doSetSyncPersistence(enable bool) tea.Cmd {
 		defer cancel()
 		return syncPersistenceMsg{err: m.client.SetSyncResponsePersistence(ctx, enable)}
 	}
+}
+
+func (m *Model) doExposeService() tea.Cmd {
+	req, protocol, err := m.buildExposeRequest()
+	if err != nil {
+		m.loading = false
+		m.exposeMsg = "Error: " + err.Error()
+		return nil
+	}
+
+	return func() tea.Msg {
+		ctx, cancel := context.WithCancel(context.Background())
+		stream, err := m.client.ExposeService(ctx, req)
+		if err != nil {
+			cancel()
+			return exposeServiceMsg{err: err}
+		}
+
+		for {
+			ev, err := stream.Recv()
+			if err != nil {
+				cancel()
+				return exposeServiceMsg{err: err}
+			}
+			ready := ev.GetReady()
+			if ready == nil {
+				continue
+			}
+
+			session := &exposeSession{
+				cancel:     cancel,
+				port:       req.Port,
+				protocol:   protocol,
+				serviceURL: ready.ServiceUrl,
+				domain:     ready.Domain,
+				name:       ready.ServiceName,
+			}
+			go func() {
+				for {
+					if _, err := stream.Recv(); err != nil {
+						return
+					}
+				}
+			}()
+			return exposeServiceMsg{session: session, ready: ready}
+		}
+	}
+}
+
+func (m *Model) stopExposeService() {
+	if m.exposeSession == nil {
+		return
+	}
+	m.exposeSession.cancel()
+	m.exposeSession = nil
+	m.exposeMsg = "Expose stopped"
+}
+
+func (m *Model) buildExposeRequest() (*proto.ExposeServiceRequest, string, error) {
+	port, err := parsePort(m.exposePortInput.Value(), "port")
+	if err != nil {
+		return nil, "", err
+	}
+
+	protocolName := strings.ToLower(strings.TrimSpace(m.exposeProtocolInput.Value()))
+	if protocolName == "" {
+		protocolName = "http"
+	}
+	protocol, err := exposeProtocol(protocolName)
+	if err != nil {
+		return nil, "", err
+	}
+
+	req := &proto.ExposeServiceRequest{
+		Port:       uint32(port),
+		Protocol:   protocol,
+		Domain:     strings.TrimSpace(m.exposeDomainInput.Value()),
+		NamePrefix: strings.TrimSpace(m.exposeNameInput.Value()),
+		Password:   m.exposePasswordInput.Value(),
+		Pin:        strings.TrimSpace(m.exposePinInput.Value()),
+	}
+
+	if groups := splitCommaList(m.exposeGroupsInput.Value()); len(groups) > 0 {
+		req.UserGroups = groups
+	}
+
+	external := strings.TrimSpace(m.exposeExternalInput.Value())
+	if external != "" {
+		if !isClusterExposeProtocol(protocolName) {
+			return nil, "", fmt.Errorf("external port is only supported for tcp, udp, or tls")
+		}
+		listenPort, err := parsePort(external, "external port")
+		if err != nil {
+			return nil, "", err
+		}
+		req.ListenPort = uint32(listenPort)
+	}
+
+	if isClusterExposeProtocol(protocolName) && (req.Pin != "" || req.Password != "" || len(req.UserGroups) > 0) {
+		return nil, "", fmt.Errorf("auth is only supported for http or https")
+	}
+
+	if req.Pin != "" && (len(req.Pin) != 6 || !isDigits(req.Pin)) {
+		return nil, "", fmt.Errorf("pin must be exactly 6 digits")
+	}
+
+	return req, protocolName, nil
+}
+
+func parsePort(value, label string) (uint64, error) {
+	value = strings.TrimSpace(value)
+	port, err := strconv.ParseUint(value, 10, 16)
+	if err != nil || port == 0 {
+		return 0, fmt.Errorf("%s must be 1-65535", label)
+	}
+	return port, nil
+}
+
+func exposeProtocol(value string) (proto.ExposeProtocol, error) {
+	switch value {
+	case "http":
+		return proto.ExposeProtocol_EXPOSE_HTTP, nil
+	case "https":
+		return proto.ExposeProtocol_EXPOSE_HTTPS, nil
+	case "tcp":
+		return proto.ExposeProtocol_EXPOSE_TCP, nil
+	case "udp":
+		return proto.ExposeProtocol_EXPOSE_UDP, nil
+	case "tls":
+		return proto.ExposeProtocol_EXPOSE_TLS, nil
+	default:
+		return proto.ExposeProtocol_EXPOSE_HTTP, fmt.Errorf("protocol must be http, https, tcp, udp, or tls")
+	}
+}
+
+func isClusterExposeProtocol(value string) bool {
+	return value == "tcp" || value == "udp" || value == "tls"
+}
+
+func splitCommaList(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func isDigits(value string) bool {
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return value != ""
 }
 
 func (m *Model) doCleanState(name string) tea.Cmd {
@@ -714,9 +958,7 @@ func (m *Model) rebuildTables() {
 	if m.fwdRules != nil {
 		m.fwdTable = buildFwdTable(m.fwdRules, m.width, m.height)
 	}
-	if m.events != nil {
-		m.eventsTable = buildEventsTable(m.events, m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
-	}
+	m.eventsTable = buildEventsTable(m.eventsForDisplay(), m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
 	if m.profiles != nil {
 		m.profilesTable = buildProfilesTable(m.profiles, m.activeProfile, m.width, m.height)
 	}
@@ -730,6 +972,16 @@ func (m *Model) filteredPeers() []*proto.PeerState {
 		return nil
 	}
 	return filterPeers(m.status.FullStatus.Peers, m.peersSearch.Value(), m.peersFilter)
+}
+
+func (m *Model) eventsForDisplay() []*proto.SystemEvent {
+	if len(m.events) > 0 {
+		return m.events
+	}
+	if m.status != nil && m.status.FullStatus != nil {
+		return m.status.FullStatus.Events
+	}
+	return nil
 }
 
 func (m *Model) selectedPeer() *proto.PeerState {
@@ -804,6 +1056,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = msg.status
 			if m.status != nil && m.status.FullStatus != nil {
 				m.rebuildPeersTableKeepingSelection()
+				if len(m.events) == 0 {
+					m.eventsTable = buildEventsTable(m.eventsForDisplay(), m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
+				}
 			}
 		}
 
@@ -819,6 +1074,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.fwdTable = buildFwdTable(m.fwdRules, m.width, m.height)
 		}
 
+	case exposeServiceMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.exposeMsg = "Error: " + msg.err.Error()
+		} else if msg.session != nil && msg.ready != nil {
+			if m.exposeSession != nil {
+				m.exposeSession.cancel()
+			}
+			m.exposeSession = msg.session
+			m.exposeEditing = false
+			m.clearExposeInputs()
+			m.exposeMsg = "Expose started: " + msg.ready.ServiceUrl
+		}
+
 	case configMsg:
 		if msg.err == nil && msg.cfg != nil {
 			m.config = msg.cfg
@@ -830,7 +1099,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case eventsMsg:
 		if msg.err == nil {
 			m.events = msg.events
-			m.eventsTable = buildEventsTable(m.events, m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
+			m.eventsTable = buildEventsTable(m.eventsForDisplay(), m.eventsFilter, m.eventsSearch.Value(), m.width, m.height)
 		}
 
 	case profilesMsg:
@@ -1625,7 +1894,11 @@ func (m *Model) renderFooter() string {
 			help = "t:Trace  s:States  c:Config  a:Capture  f:Debug for 1m  " + nav
 		}
 	case tabServices:
-		help = "r:Refresh forwarding rules  " + nav
+		if m.exposeEditing {
+			help = "Esc:Cancel  Tab:Next field  ctrl+s:Start expose"
+		} else {
+			help = "n:New expose  x:Stop expose  r:Refresh forwarding rules  " + nav
+		}
 	default:
 		help = "c:Connect  u:Up  d:Down  L:Logout  r:Refresh  " + nav
 	}

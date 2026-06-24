@@ -75,6 +75,10 @@ func (c *Client) ForwardingRules(ctx context.Context) ([]*proto.ForwardingRule, 
 	return resp.Rules, nil
 }
 
+func (c *Client) ExposeService(ctx context.Context, req *proto.ExposeServiceRequest) (proto.DaemonService_ExposeServiceClient, error) {
+	return c.daemon.ExposeService(ctx, req)
+}
+
 func (c *Client) DebugBundle(ctx context.Context, anonymize, systemInfo bool) (string, error) {
 	resp, err := c.daemon.DebugBundle(ctx, &proto.DebugBundleRequest{
 		Anonymize:  anonymize,
@@ -92,7 +96,11 @@ func (c *Client) Logout(ctx context.Context) error {
 }
 
 func (c *Client) GetConfig(ctx context.Context) (*proto.GetConfigResponse, error) {
-	return c.daemon.GetConfig(ctx, &proto.GetConfigRequest{})
+	req := &proto.GetConfigRequest{}
+	if active, err := c.GetActiveProfile(ctx); err == nil && active != "" {
+		req.ProfileName = active
+	}
+	return c.daemon.GetConfig(ctx, req)
 }
 
 func (c *Client) Login(ctx context.Context, setupKey, managementURL string) error {
